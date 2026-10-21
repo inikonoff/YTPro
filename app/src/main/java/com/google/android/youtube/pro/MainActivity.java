@@ -1,13 +1,16 @@
 package com.google.android.youtube.pro;
 
 import android.app.Activity;
+import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
+import android.app.RemoteAction;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -20,6 +23,11 @@ import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.widget.Button;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 // Import the separated components
 import com.google.android.youtube.pro.webview.YTProWebView;
 import com.google.android.youtube.pro.webview.YTProWebViewClient;
@@ -28,8 +36,13 @@ import com.google.android.youtube.pro.webview.WebAppInterface;
 import com.google.android.youtube.pro.webview.BinaryStreamManager;
 
 import com.google.android.youtube.pro.receivers.MediaCommandReceiver;
+import com.google.android.youtube.pro.receivers.NotificationActionReceiver;
 
 public class MainActivity extends Activity {
+
+    // PiP button that hides the video and keeps the sound playing in the background.
+    public static final String ACTION_AUDIO_ONLY = "AUDIO_ONLY_ACTION";
+    private static final Pattern SHORTS_URL = Pattern.compile("youtube\\.com/shorts/([\\w-]+)");
 
     public boolean portrait = false;
     public boolean isPlaying = false;
@@ -40,6 +53,7 @@ public class MainActivity extends Activity {
     private YTProWebView web;
     private MediaCommandReceiver broadcastReceiver;
     private OnBackInvokedCallback backCallback;
+    private boolean pipPortrait = false;
     public BinaryStreamManager streamManager;
     
     
@@ -92,6 +106,10 @@ public class MainActivity extends Activity {
             }
         }
         
+        // Shorts are disabled in this fork: open shorts links as regular videos.
+        Matcher shorts = SHORTS_URL.matcher(url);
+        if (shorts.find()) url = "https://m.youtube.com/watch?v=" + shorts.group(1);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
           web.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
@@ -114,7 +132,7 @@ public class MainActivity extends Activity {
    
 
     private void setupReceiver() {
-        broadcastReceiver = new MediaCommandReceiver(web);
+        broadcastReceiver = new MediaCommandReceiver(this, web);
         if (Build.VERSION.SDK_INT >= 34 && getApplicationInfo().targetSdkVersion >= 34) {
             registerReceiver(broadcastReceiver, new IntentFilter("TRACKS_TRACKS"), RECEIVER_EXPORTED);
         } else {
@@ -136,11 +154,15 @@ public class MainActivity extends Activity {
     }
 
     private void handleBackPress() {
-        if (web.canGoBack()) {
-            web.goBack();
-        } else {
-            finish();
-        }
+        // The gestures module consumes Back while the in-app mini player is open.
+        web.evaluateJavascript("(function(){try{return !!(window.__ytproBack && window.__ytproBack());}catch(e){return false;}})()", value -> {
+            if ("true".equals(value)) return;
+            if (web.canGoBack()) {
+                web.goBack();
+            } else {
+                finish();
+            }
+        });
     }
 
     @Override
@@ -174,18 +196,66 @@ public class MainActivity extends Activity {
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
         if (Build.VERSION.SDK_INT >= 26 && web.getUrl() != null && web.getUrl().contains("watch")) {
-            if (isPlaying) {
-                try {
-                    isPip = true;
-                    PictureInPictureParams params = new PictureInPictureParams.Builder()
-                            .setAspectRatio(new Rational(portrait ? 9 : 16, portrait ? 16 : 9))
-                            .build();
-                    enterPictureInPictureMode(params);
-                } catch (IllegalStateException e) {
-                    e.printStackTrace();
-                }
-            }
+            if (isPlaying) enterPip(portrait);
         }
+    }
+
+    public void enterPip(boolean portraitVideo) {
+        if (Build.VERSION.SDK_INT < 26) return;
+        pipPortrait = portraitVideo;
+        try {
+            isPip = true;
+            enterPictureInPictureMode(buildPipParams());
+        } catch (IllegalStateException e) {
+            isPip = false;
+            e.printStackTrace();
+        }
+    }
+
+    /* PiP buttons: audio only (instead of "previous"), play/pause, next. */
+    @android.annotation.TargetApi(26)
+    private PictureInPictureParams buildPipParams() {
+        List<RemoteAction> actions = new ArrayList<>();
+        actions.add(pipAction(R.drawable.ic_headphones_white, R.string.pip_audio_only, ACTION_AUDIO_ONLY, 101));
+        if (isPlaying) {
+            actions.add(pipAction(R.drawable.ic_pause_white, R.string.pip_pause, "PAUSE_ACTION", 102));
+        } else {
+            actions.add(pipAction(R.drawable.ic_play_arrow_white, R.string.pip_play, "PLAY_ACTION", 103));
+        }
+        actions.add(pipAction(R.drawable.ic_skip_next_white, R.string.pip_next, "NEXT_ACTION", 104));
+        return new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(pipPortrait ? 9 : 16, pipPortrait ? 16 : 9))
+                .setActions(actions)
+                .build();
+    }
+
+    @android.annotation.TargetApi(26)
+    private RemoteAction pipAction(int icon, int title, String action, int requestCode) {
+        Intent intent = new Intent(this, NotificationActionReceiver.class).setAction(action);
+        PendingIntent pi = PendingIntent.getBroadcast(this, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String label = getString(title);
+        return new RemoteAction(Icon.createWithResource(this, icon), label, label, pi);
+    }
+
+    /* Keeps the play/pause PiP button in sync with the player. */
+    public void updatePipActions() {
+        if (Build.VERSION.SDK_INT < 26 || !isInPictureInPictureMode()) return;
+        try {
+            setPictureInPictureParams(buildPipParams());
+        } catch (IllegalStateException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /* Headphones button: the PiP window goes away, playback continues in the background. */
+    public void goAudioOnly() {
+        if (Build.VERSION.SDK_INT >= 24 && isInPictureInPictureMode()) {
+            moveTaskToBack(true);
+        }
+        // removePIP() pauses and resumes the video on the way out; make sure it keeps playing.
+        web.postDelayed(() -> web.evaluateJavascript(
+                "(function(){var v=document.querySelector('.video-stream');if(v&&v.paused)v.play();})()", null), 600);
     }
 
     @Override

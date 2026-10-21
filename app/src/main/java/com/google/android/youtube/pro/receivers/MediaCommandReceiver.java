@@ -5,12 +5,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.util.Log;
 
+import com.google.android.youtube.pro.MainActivity;
 import com.google.android.youtube.pro.webview.YTProWebView;
 
 public class MediaCommandReceiver extends BroadcastReceiver {
+    private final MainActivity activity;
     private final YTProWebView web;
 
-    public MediaCommandReceiver(YTProWebView web) {
+    public MediaCommandReceiver(MainActivity activity, YTProWebView web) {
+        this.activity = activity;
         this.web = web;
     }
 
@@ -36,6 +39,9 @@ public class MediaCommandReceiver extends BroadcastReceiver {
                 break;
             case "SEEKTO":
                 web.evaluateJavascript("seekTo('" + intent.getExtras().getString("pos") + "');", null);
+                break;
+            case MainActivity.ACTION_AUDIO_ONLY:
+                activity.goAudioOnly();
                 break;
         }
     }

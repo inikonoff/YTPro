@@ -5,4 +5,8 @@
 	<string	name="no_pip">Unfortunately, PIP is not supported on your Android version</string>
 	<string	name="dl_started">Download started</string>
 	<string	name="dl">Download</string>
+	<string	name="pip_audio_only">Audio only</string>
+	<string	name="pip_play">Play</string>
+	<string	name="pip_pause">Pause</string>
+	<string	name="pip_next">Next</string>
 </resources>
