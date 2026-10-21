@@ -1,5 +1,10 @@
 apply plugin: 'com.android.application'
 
+// versionCode must grow with every build, otherwise Android refuses to install
+// a new APK over the old one. Minutes since the Unix epoch always increase,
+// both on CI and on local builds, and fit into the int range until year ~6000.
+def autoVersionCode = System.currentTimeMillis().intdiv(60000L) as int
+
 android {
     namespace "com.google.android.youtube.pro"  
     compileSdk 36
@@ -8,7 +13,7 @@ android {
         applicationId "com.google.android.youtube.pro"
         minSdkVersion 21
         targetSdkVersion 36
-        versionCode 1
+        versionCode autoVersionCode
         versionName "3.98"
     }
 
