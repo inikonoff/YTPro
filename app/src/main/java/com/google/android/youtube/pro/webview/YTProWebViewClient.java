@@ -24,10 +24,28 @@ public class YTProWebViewClient extends WebViewClient {
 	
 	private final MainActivity activity;
 	private final YTProWebView web;
-	
+
+	// Fork-local gestures module (app/src/main/assets), read once and cached.
+	private static String gesturesJs = null;
+
 	public YTProWebViewClient(MainActivity activity, YTProWebView web) {
 		this.activity = activity;
 		this.web = web;
+	}
+
+	private String loadGesturesJs() {
+		if (gesturesJs != null) return gesturesJs;
+		try (InputStream is = activity.getAssets().open("ytpro-gestures.js");
+		     java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+			byte[] buf = new byte[4096];
+			int n;
+			while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
+			gesturesJs = out.toString("UTF-8");
+		} catch (Exception e) {
+			Log.e("YTPRO_WVC", "Gestures asset load failed: " + e.getMessage());
+			gesturesJs = "";
+		}
+		return gesturesJs;
 	}
 	
 	@Override
@@ -188,10 +206,13 @@ public class YTProWebViewClient extends WebViewClient {
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest'; document.body.appendChild(script);  })();", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest/bgplay.js'; document.body.appendChild(script);  })();", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script');script.type='module';script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest/innertube.js'; document.body.appendChild(script);  })();", null);
-		
-		
-		
-		
+
+		// Fork gestures (volume/brightness, fullscreen/PiP swipes, 2x hold, pinch zoom).
+		// Idempotent: the script guards itself against double injection.
+		String gestures = loadGesturesJs();
+		if (!gestures.isEmpty()) web.evaluateJavascript(gestures, null);
+
+
 		if (!url.contains("youtube.com/watch") && !url.contains("youtube.com/shorts") && activity.isPlaying) {
 			activity.isPlaying = false;
 			activity.mediaSession = false;

@@ -241,6 +241,15 @@ public class WebAppInterface {
 	}
 	
 	@JavascriptInterface
+	public void resetBrightness() {
+		activity.runOnUiThread(() -> {
+			WindowManager.LayoutParams layout = activity.getWindow().getAttributes();
+			layout.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+			activity.getWindow().setAttributes(layout);
+		});
+	}
+
+	@JavascriptInterface
 	public void pipvid(String mode) {
 		if (android.os.Build.VERSION.SDK_INT >= 26) {
 			try {
