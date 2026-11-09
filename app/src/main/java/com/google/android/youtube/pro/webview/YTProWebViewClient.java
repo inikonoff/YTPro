@@ -25,27 +25,30 @@ public class YTProWebViewClient extends WebViewClient {
 	private final MainActivity activity;
 	private final YTProWebView web;
 
-	// Fork-local gestures module (app/src/main/assets), read once and cached.
-	private static String gesturesJs = null;
+	// Fork-local modules (app/src/main/assets), read once and cached.
+	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-gestures.js" };
+	private static final java.util.Map<String, String> moduleCache = new java.util.HashMap<>();
 
 	public YTProWebViewClient(MainActivity activity, YTProWebView web) {
 		this.activity = activity;
 		this.web = web;
 	}
 
-	private String loadGesturesJs() {
-		if (gesturesJs != null) return gesturesJs;
-		try (InputStream is = activity.getAssets().open("ytpro-gestures.js");
+	private String loadAsset(String name) {
+		String cached = moduleCache.get(name);
+		if (cached != null) return cached;
+		String text = "";
+		try (InputStream is = activity.getAssets().open(name);
 		     java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
 			byte[] buf = new byte[4096];
 			int n;
 			while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
-			gesturesJs = out.toString("UTF-8");
+			text = out.toString("UTF-8");
 		} catch (Exception e) {
-			Log.e("YTPRO_WVC", "Gestures asset load failed: " + e.getMessage());
-			gesturesJs = "";
+			Log.e("YTPRO_WVC", "Asset load failed: " + name + " " + e.getMessage());
 		}
-		return gesturesJs;
+		moduleCache.put(name, text);
+		return text;
 	}
 	
 	@Override
@@ -227,10 +230,11 @@ public class YTProWebViewClient extends WebViewClient {
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/bgplay.js'; document.body.appendChild(script);  })();", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script');script.type='module';script.src='https://youtube.com/ytpro_local/innertube.js'; document.body.appendChild(script);  })();", null);
 
-		// Fork gestures (volume/brightness, fullscreen/PiP swipes, 2x hold, pinch zoom).
-		// Idempotent: the script guards itself against double injection.
-		String gestures = loadGesturesJs();
-		if (!gestures.isEmpty()) web.evaluateJavascript(gestures, null);
+		// Fork modules: Hide Shorts, gestures. Each guards itself against double injection.
+		for (String module : FORK_MODULES) {
+			String js = loadAsset(module);
+			if (!js.isEmpty()) web.evaluateJavascript(js, null);
+		}
 
 
 		if (!url.contains("youtube.com/watch") && !url.contains("youtube.com/shorts") && activity.isPlaying) {
