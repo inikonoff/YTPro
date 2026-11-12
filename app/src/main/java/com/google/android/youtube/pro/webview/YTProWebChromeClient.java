@@ -4,6 +4,8 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.view.View;
 import android.view.WindowManager;
@@ -20,6 +22,7 @@ public class YTProWebChromeClient extends WebChromeClient {
     private final YTProWebView web;
     
     private View mCustomView;
+    private FrameLayout mCustomHolder;
     private WebChromeClient.CustomViewCallback mCustomViewCallback;
     private int mOriginalOrientation;
     private int mOriginalSystemUiVisibility;
@@ -65,7 +68,11 @@ public class YTProWebChromeClient extends WebChromeClient {
         mOriginalOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
 
         mCustomViewCallback = viewCallback;
-        ((FrameLayout) activity.getWindow().getDecorView()).addView(mCustomView, new FrameLayout.LayoutParams(-1, -1));
+        // The fullscreen view gets its own window-visibility events. Without this wrapper a locked
+        // screen tells WebView the page is hidden and playback stops, despite background play.
+        mCustomHolder = new BgPlayFrame(activity);
+        mCustomHolder.addView(mCustomView, new FrameLayout.LayoutParams(-1, -1));
+        ((FrameLayout) activity.getWindow().getDecorView()).addView(mCustomHolder, new FrameLayout.LayoutParams(-1, -1));
         activity.getWindow().getDecorView().setSystemUiVisibility(3846);
     }
 
@@ -78,7 +85,11 @@ public class YTProWebChromeClient extends WebChromeClient {
             activity.getWindow().setAttributes(params);
         }
 
-        ((FrameLayout) activity.getWindow().getDecorView()).removeView(mCustomView);
+        if (mCustomHolder != null) {
+            mCustomHolder.removeAllViews();
+            ((FrameLayout) activity.getWindow().getDecorView()).removeView(mCustomHolder);
+            mCustomHolder = null;
+        }
         mCustomView = null;
         activity.getWindow().getDecorView().setSystemUiVisibility(mOriginalSystemUiVisibility);
         
@@ -92,6 +103,22 @@ public class YTProWebChromeClient extends WebChromeClient {
 
         mCustomViewCallback = null;
         web.clearFocus();
+    }
+
+    /** Hides "window is gone" from the fullscreen video when background play is on (same rule as YTProWebView). */
+    private static class BgPlayFrame extends FrameLayout {
+        BgPlayFrame(Context context) {
+            super(context);
+        }
+
+        @Override
+        public void dispatchWindowVisibilityChanged(int visibility) {
+            SharedPreferences prefs = getContext().getSharedPreferences("YTPRO", Context.MODE_PRIVATE);
+            boolean bgPlay = prefs.getBoolean("bgplay", false);
+            if (visibility == View.VISIBLE || !bgPlay) {
+                super.dispatchWindowVisibilityChanged(visibility);
+            }
+        }
     }
 
     @Override

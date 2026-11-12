@@ -9,7 +9,14 @@ android {
         minSdkVersion 21
         targetSdkVersion 36
         versionCode 1
-        versionName "3.98"
+        versionName "4.0"
+    }
+
+    // Injected scripts ship inside the APK (served as https://youtube.com/ytpro_local/<file>)
+    sourceSets {
+        main {
+            assets.srcDirs += ['../scripts']
+        }
     }
 
     buildTypes {

@@ -1,83 +1,19 @@
-<p align="center">
-<img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/ytpro.gif' height=150  >
-</p>
-<h1 align=center>YT PRO </h1>
+# YT PRO (форк inikonoff)
 
-<div align="center">
+Android-клиент YouTube на основе WebView с JS-инъекцией: блокировка рекламы, SponsorBlock, фоновое воспроизведение, скачивание видео, PiP, суммаризация через Gemini.
 
+Форк [YTPRO](https://github.com/prateek-chaubey/YTPro) (MIT License, © Prateek Chaubey). Синхронизирован с оригиналом версии 4.0.0.
 
-[![Gradle](https://github.com/prateek-chaubey/YTPro/actions/workflows/gradle.yml/badge.svg)](https://github.com/prateek-chaubey/YTPro/actions/workflows/gradle.yml)
-<a href="https://www.jsdelivr.com/package/npm/ytpro?tab=stats" ><img alt="jsDelivr monthly hits badge" src="https://data.jsdelivr.com/v1/package/npm/ytpro/badge"></a>
-<img src=https://img.shields.io/github/downloads/prateek-chaubey/YTPro/total >
+## Отличия от оригинала
 
-</div>
+- Скрипты (`scripts/`) упакованы в APK и не подгружаются из npm-пакета оригинала: приложение не меняется без пересборки.
+- Убраны окно и проверка обновлений, баннеры и ссылки на автора.
+- Жесты (`app/src/main/assets/ytpro-gestures.js`):
+  - в полноэкранном режиме слева яркость (запоминается), справа громкость, центр нейтральный, свайп вниз из центра выходит из полноэкранного режима;
+  - в обычном режиме свайп вверх по видео включает полноэкранный режим, свайп вниз — PiP;
+  - удержание пальца даёт скорость 2×, пока палец прижат;
+  - pinch в полноэкранном режиме заполняет экран.
 
-### Become a Sponsor 
----
-> [!TIP]
-> If you like this project, consider [sponsoring](https://github.com/sponsors/prateek-chaubey) to support the author 🌸
----
+## Сборка
 
-## Download YT PRO
-
-[![Download zip](https://custom-icon-badges.herokuapp.com/badge/-Download-ff0000?style=for-the-badge&logo=download&logoColor=white "Download Apk")](https://nightly.link/prateek-chaubey/YTPro/workflows/gradle/main/YTPRO.zip)
-
-#### Screenshots
-| | | |
-|:--:|:--:|:--:| 
-|<img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen3.jpg'  > | <img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen2.jpg'  > |<img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen5.jpg'  > | 
-|<img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen6.jpg'  > | <img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen4.jpg'  > |<img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/screen1.jpg'  > |
-
-
-## Features
- * <img src='https://raw.githubusercontent.com/prateek-chaubey/YTPro/main/.github/img/gemini-logo-13486188-10900314-unscreen-ezgif.com-crop.gif' height=15 width=15 > Google Gemini
-   * Summarise Vidoes
-   * Customisable prompts and models
- * Video Downloader
- * Shorts Downloader
- * In-built Video and Audio Muxer
- * Thumbnails Downloader
- * Captions Downloader
- * Ads Blocker
- * Minimize Video
- * Picture in Picture Mode
- * Gesture control for Volume and Brightness 
- * Shows Number of Dislikes
- * Background Audio Player
- * Custom Heart feature to save videos without logging into your account
- * Enable / disable media codecs
- * Skip Sponsers
- * Force Zoom
- * Hide Shorts
- * Upto 10x video speed 
- * Minimal APK size
- * Adaptive UI icons
- * Minimal
- * Almost 0 Internal Dependencies
- * Auto Updation of App
-
-
-## Gemini Prompt
-The available variables for gemini prompt are
-* `{url}` : The URL of the video
-* `{title}` : Title of the video
-* `{videoId}` : Video Id of the video
-
-## ToDo
- * Enhance Audio
- * Skip Silence 
- 
-
-### Credits
- * [Sponsor Block](https://github.com/ajayyy/SponsorBlock)
- * [return-youtube-dislike](https://github.com/Anarios/return-youtube-dislike)
- * [YouTube.js](https://github.com/LuanRT/YouTube.js/)
-
-### ❤️Supporters❤️
-[![Stargazers repo roster for @prateek-chaubey/YTPro](http://reporoster.com/stars/dark/prateek-chaubey/YTPro)](https://github.com/prateek-chaubey/YTPro/stargazers)
-     
-[![Forkers repo roster for @prateek-chaubey/YTPro](http://reporoster.com/forks/dark/prateek-chaubey/YTPro)](https://github.com/prateek-chaubey/YTPro/network/members)
-
-
-## Disclaimer 
-This is an educational project aimed at showcasing javascript injection into a webview to enhance productivity.
+`./gradlew assembleRelease` или GitHub Actions (workflow «Gradle», артефакт `YTPRO`).

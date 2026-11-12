@@ -25,27 +25,30 @@ public class YTProWebViewClient extends WebViewClient {
 	private final MainActivity activity;
 	private final YTProWebView web;
 
-	// Fork-local gestures module (app/src/main/assets), read once and cached.
-	private static String gesturesJs = null;
+	// Fork-local modules (app/src/main/assets), read once and cached.
+	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-gestures.js" };
+	private static final java.util.Map<String, String> moduleCache = new java.util.HashMap<>();
 
 	public YTProWebViewClient(MainActivity activity, YTProWebView web) {
 		this.activity = activity;
 		this.web = web;
 	}
 
-	private String loadGesturesJs() {
-		if (gesturesJs != null) return gesturesJs;
-		try (InputStream is = activity.getAssets().open("ytpro-gestures.js");
+	private String loadAsset(String name) {
+		String cached = moduleCache.get(name);
+		if (cached != null) return cached;
+		String text = "";
+		try (InputStream is = activity.getAssets().open(name);
 		     java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
 			byte[] buf = new byte[4096];
 			int n;
 			while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
-			gesturesJs = out.toString("UTF-8");
+			text = out.toString("UTF-8");
 		} catch (Exception e) {
-			Log.e("YTPRO_WVC", "Gestures asset load failed: " + e.getMessage());
-			gesturesJs = "";
+			Log.e("YTPRO_WVC", "Asset load failed: " + name + " " + e.getMessage());
 		}
-		return gesturesJs;
+		moduleCache.put(name, text);
+		return text;
 	}
 	
 	@Override
@@ -147,6 +150,26 @@ public class YTProWebViewClient extends WebViewClient {
 		}
 		
 		
+		// Bundled scripts (scripts/ folder packed as assets), no remote copy from the original author.
+		if (url.contains("youtube.com/ytpro_local/")) {
+			String name = url.substring(url.indexOf("ytpro_local/") + "ytpro_local/".length());
+			int cut = name.indexOf('?');
+			if (cut >= 0) name = name.substring(0, cut);
+			if (name.equals("script.js") || name.equals("bgplay.js") || name.equals("innertube.js")) {
+				try {
+					Map<String, String> headers = new HashMap<>();
+					headers.put("Access-Control-Allow-Origin", "*");
+					headers.put("Cross-Origin-Resource-Policy", "cross-origin");
+					headers.put("Cache-Control", "no-store");
+					return new WebResourceResponse("application/javascript", "utf-8", 200, "OK",
+							headers, activity.getAssets().open(name));
+				} catch (Exception e) {
+					Log.e("YTPRO_WVC", "Local script load failed: " + name + " " + e.getMessage());
+				}
+			}
+			return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", new HashMap<>(), null);
+		}
+
 		if (url.contains("youtube.com/ytpro_cdn/")) {
 			String modifiedUrl = url;
 			if (url.contains("youtube.com/ytpro_cdn/esm")) modifiedUrl = url.replace("youtube.com/ytpro_cdn/esm", "esm.sh");
@@ -203,14 +226,15 @@ public class YTProWebViewClient extends WebViewClient {
 	@Override
 	public void onPageFinished(WebView view, String url) {
 		web.evaluateJavascript("if (window.trustedTypes && window.trustedTypes.createPolicy && !window.trustedTypes.defaultPolicy) {window.trustedTypes.createPolicy('default', {createHTML: (string) => string,createScriptURL: string => string, createScript: string => string, });}", null);
-		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest'; document.body.appendChild(script);  })();", null);
-		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest/bgplay.js'; document.body.appendChild(script);  })();", null);
-		web.evaluateJavascript("(function () { var script = document.createElement('script');script.type='module';script.src='https://youtube.com/ytpro_cdn/npm/ytpro@latest/innertube.js'; document.body.appendChild(script);  })();", null);
+		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/script.js'; document.body.appendChild(script);  })();", null);
+		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/bgplay.js'; document.body.appendChild(script);  })();", null);
+		web.evaluateJavascript("(function () { var script = document.createElement('script');script.type='module';script.src='https://youtube.com/ytpro_local/innertube.js'; document.body.appendChild(script);  })();", null);
 
-		// Fork gestures (volume/brightness, fullscreen/PiP swipes, 2x hold, pinch zoom).
-		// Idempotent: the script guards itself against double injection.
-		String gestures = loadGesturesJs();
-		if (!gestures.isEmpty()) web.evaluateJavascript(gestures, null);
+		// Fork modules: Hide Shorts, gestures. Each guards itself against double injection.
+		for (String module : FORK_MODULES) {
+			String js = loadAsset(module);
+			if (!js.isEmpty()) web.evaluateJavascript(js, null);
+		}
 
 
 		if (!url.contains("youtube.com/watch") && !url.contains("youtube.com/shorts") && activity.isPlaying) {
