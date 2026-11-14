@@ -15,6 +15,7 @@ import android.util.Rational;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.WebView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -65,6 +66,11 @@ public class MainActivity extends Activity {
         
         this.dL = dl;
         web = findViewById(R.id.web);
+        // Keep the renderer process important while the screen is off, otherwise the system may
+        // throttle or freeze it and background playback stops.
+        if (Build.VERSION.SDK_INT >= 26) {
+            web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        }
         
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setSupportZoom(true);
@@ -138,10 +144,33 @@ public class MainActivity extends Activity {
     }
 
     private void handleBackPress() {
-        if (web.canGoBack()) {
-            web.goBack();
-        } else {
-            finish();
+        // The in-app miniplayer handles back itself (its video list lives in an iframe).
+        web.evaluateJavascript("(window.ytproMini && ytproMini.back()) ? '1' : '0'", value -> {
+            if ("\"1\"".equals(value)) return;
+            if (web.canGoBack()) {
+                web.goBack();
+            } else {
+                finish();
+            }
+        });
+    }
+
+    private boolean bgPlayOn() {
+        return getSharedPreferences("YTPRO", MODE_PRIVATE).getBoolean("bgplay", false);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (web != null) web.evaluateJavascript("window.ytproBackground && ytproBackground(false);", null);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Screen locked or app minimised: stop YouTube from pausing the video by itself.
+        if (web != null && bgPlayOn()) {
+            web.evaluateJavascript("window.ytproBackground && ytproBackground(true);", null);
         }
     }
 

@@ -7,7 +7,7 @@
  *  - Fullscreen, left zone  : vertical swipe = brightness (remembered between videos)
  *  - Fullscreen, right zone : vertical swipe = volume
  *  - Fullscreen, centre zone: swipe down = exit fullscreen
- *  - Normal mode, on video  : swipe up = fullscreen, swipe down = picture-in-picture
+ *  - Normal mode, on video  : swipe up = fullscreen, swipe down = in-app miniplayer (ytpro-miniplayer.js)
  *  - Any mode, hold still   : 2x speed while the finger is down
  *  - Fullscreen, pinch      : spread = fill screen, pinch in = reset
  *
@@ -128,14 +128,11 @@
     try { if (fsEl()) document.exitFullscreen(); } catch (e) {}
   }
 
-  function goPip() {
-    if (typeof PIPlayer === 'function') {
-      try { PIPlayer(true); return; } catch (e) {}
+  /* System PiP is entered by MainActivity when the app is minimised; the swipe opens the in-app window. */
+  function goMini() {
+    if (window.ytproMini && typeof ytproMini.open === 'function') {
+      try { ytproMini.open(); } catch (e) {}
     }
-    if (!HAS_ANDROID) return;
-    var v = videoEl();
-    var r = v ? v.getBoundingClientRect() : null;
-    Android.pipvid(r && r.height > r.width ? 'portrait' : 'landscape');
   }
 
   function startSpeed() {
@@ -276,7 +273,7 @@
 
   function decideMode(s, dx, dy) {
     if (Math.abs(dy) < Math.abs(dx) * 1.4) return 'ignore';   // horizontal: leave it to YouTube
-    if (!s.fs) return 'drag';                                   // normal mode: up = fullscreen, down = PiP
+    if (!s.fs) return 'drag';                                   // normal mode: up = fullscreen, down = miniplayer
     var fx = (s.x0 - s.hr.left) / s.hr.width;
     if (fx < CFG.zoneSide) return levelGesturesOn() ? 'brt' : 'ignore';
     if (fx > 1 - CFG.zoneSide) return levelGesturesOn() ? 'vol' : 'ignore';
@@ -328,7 +325,7 @@
         break;
       case 'drag':
         if (dy <= -threshold(st)) hud('⤢ Release: fullscreen', true);
-        else if (dy >= threshold(st)) hud('⧉ Release: PiP', true);
+        else if (dy >= threshold(st)) hud('⧉ Release: miniplayer', true);
         else hudHide();
         break;
       case 'exit':
@@ -380,7 +377,7 @@
     var T = threshold(s);
     if (s.mode === 'drag') {
       if (dy <= -T) goFullscreen();
-      else if (dy >= T) goPip();
+      else if (dy >= T) goMini();
     } else if (s.mode === 'exit') {
       if (dy >= T) leaveFullscreen();
     }

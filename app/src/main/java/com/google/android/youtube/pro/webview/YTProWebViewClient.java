@@ -26,7 +26,7 @@ public class YTProWebViewClient extends WebViewClient {
 	private final YTProWebView web;
 
 	// Fork-local modules (app/src/main/assets), read once and cached.
-	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-gestures.js" };
+	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-bgfix.js", "ytpro-miniplayer.js", "ytpro-gestures.js" };
 	private static final java.util.Map<String, String> moduleCache = new java.util.HashMap<>();
 
 	public YTProWebViewClient(MainActivity activity, YTProWebView web) {
@@ -155,7 +155,8 @@ public class YTProWebViewClient extends WebViewClient {
 			String name = url.substring(url.indexOf("ytpro_local/") + "ytpro_local/".length());
 			int cut = name.indexOf('?');
 			if (cut >= 0) name = name.substring(0, cut);
-			if (name.equals("script.js") || name.equals("bgplay.js") || name.equals("innertube.js")) {
+			if (name.equals("script.js") || name.equals("bgplay.js") || name.equals("innertube.js")
+					|| name.equals("ytpro-noshorts.js")) {
 				try {
 					Map<String, String> headers = new HashMap<>();
 					headers.put("Access-Control-Allow-Origin", "*");
@@ -230,7 +231,7 @@ public class YTProWebViewClient extends WebViewClient {
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/bgplay.js'; document.body.appendChild(script);  })();", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script');script.type='module';script.src='https://youtube.com/ytpro_local/innertube.js'; document.body.appendChild(script);  })();", null);
 
-		// Fork modules: Hide Shorts, gestures. Each guards itself against double injection.
+		// Fork modules: Hide Shorts, background fix, miniplayer, gestures (miniplayer before gestures). Each guards itself against double injection.
 		for (String module : FORK_MODULES) {
 			String js = loadAsset(module);
 			if (!js.isEmpty()) web.evaluateJavascript(js, null);
