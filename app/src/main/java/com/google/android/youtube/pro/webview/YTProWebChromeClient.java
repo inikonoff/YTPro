@@ -34,7 +34,9 @@ public class YTProWebChromeClient extends WebChromeClient {
 
     @Override
     public Bitmap getDefaultVideoPoster() {
-       return BitmapFactory.decodeResource(activity.getApplicationContext().getResources(), 2130837573);
+        // Transparent poster: no grey "play" placeholder before the video starts.
+        // (Upstream used a hardcoded resource id, which breaks whenever resources change.)
+        return Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888);
     }
 
     @Override

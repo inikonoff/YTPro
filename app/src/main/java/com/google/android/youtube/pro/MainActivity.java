@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.main);
+        // The theme's window background carries the pre-Android 12 splash logo; drop it once the UI is up.
+        getWindow().setBackgroundDrawableResource(R.color.splash);
         
         SharedPreferences prefs = getSharedPreferences("YTPRO", MODE_PRIVATE);
         if (!prefs.contains("bgplay")) {
