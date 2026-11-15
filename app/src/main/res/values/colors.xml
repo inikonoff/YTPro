@@ -6,5 +6,6 @@
 	<color name="colorControlNormal">#000000</color>
 	<color name="black">#DD000000</color>
     <color name="white">#FFFFFF</color>
+    <color name="splash">#0F0F0F</color>
 </resources>
 

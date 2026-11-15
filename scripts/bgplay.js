@@ -1,7 +1,6 @@
 /*****YTPRO*******
-Author: Prateek Chaubey
+Based on YTPRO by Prateek Chaubey, MIT License (see LICENSE). inikonoff fork.
 Version: 3.9.2
-URI: https://github.com/prateek-chaubey/YTPRO
 */
 
 if (typeof MediaMetadata === 'undefined') {

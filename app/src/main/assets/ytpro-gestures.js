@@ -7,9 +7,10 @@
  *  - Fullscreen, left zone  : vertical swipe = brightness (remembered between videos)
  *  - Fullscreen, right zone : vertical swipe = volume
  *  - Fullscreen, centre zone: swipe down = exit fullscreen
- *  - Normal mode, on video  : swipe up = fullscreen, swipe down = picture-in-picture
+ *  - Normal mode, on video  : swipe up = fullscreen, swipe down = in-app miniplayer (ytpro-miniplayer.js)
  *  - Any mode, hold still   : 2x speed while the finger is down
  *  - Fullscreen, pinch      : spread = fill screen, pinch in = reset
+ *  - Fullscreen, chevron button (top-left): leave fullscreen and shrink into the miniplayer
  *
  * Actions that need a user activation (requestFullscreen) run on touchend.
  */
@@ -100,18 +101,24 @@
       hudEl.style.cssText = 'position:fixed;padding:6px 14px;border-radius:18px;' +
         'background:rgba(0,0,0,.65);color:#fff;font:600 14px/1.2 system-ui,sans-serif;' +
         'pointer-events:none;z-index:2147483647;white-space:nowrap;' +
-        'transform:translateX(-50%);transition:opacity .15s;opacity:0';
+        'transform:translateX(-50%) scale(.9);opacity:0;' +
+        'transition:opacity .18s cubic-bezier(.2,.85,.25,1),transform .24s cubic-bezier(.2,.85,.25,1)';
     }
     if (hudEl.parentNode !== host) host.appendChild(hudEl);
     hudEl.style.left = (ref.left + ref.width / 2) + 'px';
     hudEl.style.top = (ref.top + Math.max(12, ref.height * 0.12)) + 'px';
     hudEl.textContent = text;
     hudEl.style.opacity = '1';
+    hudEl.style.transform = 'translateX(-50%) scale(1)';
     clearTimeout(hudTimer);
     if (!sticky) hudTimer = setTimeout(hudHide, CFG.hudMs);
   }
 
-  function hudHide() { if (hudEl) hudEl.style.opacity = '0'; }
+  function hudHide() {
+    if (!hudEl) return;
+    hudEl.style.opacity = '0';
+    hudEl.style.transform = 'translateX(-50%) scale(.9)';
+  }
 
   /* ---------- actions ---------- */
 
@@ -128,14 +135,26 @@
     try { if (fsEl()) document.exitFullscreen(); } catch (e) {}
   }
 
-  function goPip() {
-    if (typeof PIPlayer === 'function') {
-      try { PIPlayer(true); return; } catch (e) {}
+  /* System PiP is entered by MainActivity when the app is minimised; the swipe opens the in-app window. */
+  function mini() { return window.ytproMini || null; }
+
+  /* the player follows the finger: down shrinks it toward the window, up lifts it slightly */
+  function dragPreview(dy, T) {
+    var m = mini();
+    if (!m || typeof m.preview !== 'function') return;
+    var k = dy >= 0 ? clamp(dy / (window.innerHeight * 0.45), 0, 1) : -clamp(-dy / (T * 2), 0, 1);
+    try { m.preview(k); } catch (e) {}
+  }
+
+  function dragRelease(instant) {
+    var m = mini();
+    if (m && typeof m.previewCancel === 'function') { try { m.previewCancel(instant); } catch (e) {} }
+  }
+
+  function goMini() {
+    if (window.ytproMini && typeof ytproMini.open === 'function') {
+      try { ytproMini.open(); } catch (e) {}
     }
-    if (!HAS_ANDROID) return;
-    var v = videoEl();
-    var r = v ? v.getBoundingClientRect() : null;
-    Android.pipvid(r && r.height > r.width ? 'portrait' : 'landscape');
   }
 
   function startSpeed() {
@@ -169,6 +188,7 @@
       if (k < 1.01) k = 1;
     }
     holder.style.transformOrigin = 'center center';
+    holder.style.transition = 'transform .32s cubic-bezier(.2,.85,.25,1)';
     holder.style.transform = 'scale(' + k + ')';
     zoomed = k > 1;
     // keep upstream's own zoom state consistent so it does not fight us
@@ -276,7 +296,7 @@
 
   function decideMode(s, dx, dy) {
     if (Math.abs(dy) < Math.abs(dx) * 1.4) return 'ignore';   // horizontal: leave it to YouTube
-    if (!s.fs) return 'drag';                                   // normal mode: up = fullscreen, down = PiP
+    if (!s.fs) return 'drag';                                   // normal mode: up = fullscreen, down = miniplayer
     var fx = (s.x0 - s.hr.left) / s.hr.width;
     if (fx < CFG.zoneSide) return levelGesturesOn() ? 'brt' : 'ignore';
     if (fx > 1 - CFG.zoneSide) return levelGesturesOn() ? 'vol' : 'ignore';
@@ -327,8 +347,8 @@
         levelApply(st.mode, st.level);
         break;
       case 'drag':
+        dragPreview(dy, threshold(st));
         if (dy <= -threshold(st)) hud('⤢ Release: fullscreen', true);
-        else if (dy >= threshold(st)) hud('⧉ Release: PiP', true);
         else hudHide();
         break;
       case 'exit':
@@ -375,27 +395,143 @@
       return;
     }
     hudHide();
-    if (cancelled) return;
-
     var T = threshold(s);
     if (s.mode === 'drag') {
-      if (dy <= -T) goFullscreen();
-      else if (dy >= T) goPip();
-    } else if (s.mode === 'exit') {
+      if (!cancelled && dy >= T) { goMini(); return; }        // glides on from where the finger left it
+      if (!cancelled && dy <= -T) { dragRelease(true); goFullscreen(); return; }
+      dragRelease(false);                                      // not far enough: glide back
+      return;
+    }
+    if (cancelled) return;
+    if (s.mode === 'exit') {
       if (dy >= T) leaveFullscreen();
     }
   }
 
+  /* ---------- fullscreen chevron: minimise to the in-app window ---------- */
+
+  var chev = null;
+  var chevTimer = null;
+  var CHEV_MS = 3000;          // auto-hide after this much inactivity
+  var minimising = false;
+
+  function chevShow() {
+    if (!chev) return;
+    chev.style.opacity = '1';
+    chev.style.transform = 'scale(1)';
+    chev.style.pointerEvents = 'auto';
+    clearTimeout(chevTimer);
+    chevTimer = setTimeout(chevHide, CHEV_MS);
+  }
+
+  function chevHide() {
+    if (!chev) return;
+    chev.style.opacity = '0';
+    chev.style.transform = 'scale(.8)';
+    chev.style.pointerEvents = 'none';
+  }
+
+  function chevRemove() {
+    clearTimeout(chevTimer);
+    if (chev) { chev.remove(); chev = null; }
+  }
+
+  /* 12px from the edge, more when a notch / rounded corner needs it */
+  function inset(side) {
+    var v = 'max(12px,env(safe-area-inset-' + side + '))';
+    try { if (window.CSS && CSS.supports && CSS.supports('top', v)) return v; } catch (e) {}
+    return '12px';
+  }
+
+  function chevAdd() {
+    var fs = fsEl();
+    if (!fs || chev || inPip() || !onWatch()) return;
+    if (fs.tagName === 'VIDEO' || !window.ytproMini) return;   // a <video> cannot hold the button
+    chev = document.createElement('button');
+    chev.id = 'ytproFsChevron';
+    chev.setAttribute('aria-label', 'Minimise');
+    chev.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">' +
+      '<path d="M5.5 8.5 12 15l6.5-6.5" fill="none" stroke="#fff" stroke-width="2.4" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    chev.style.cssText = 'position:absolute;z-index:2147483646;width:44px;height:44px;padding:0;margin:0;' +
+      'top:' + inset('top') + ';left:' + inset('left') + ';' +
+      'display:flex;align-items:center;justify-content:center;border:0;border-radius:22px;' +
+      'background:rgba(0,0,0,.42);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);' +
+      'box-shadow:0 2px 10px rgba(0,0,0,.35);touch-action:none;-webkit-tap-highlight-color:transparent;' +
+      'opacity:0;transform:scale(.8);pointer-events:none;' +
+      'transition:opacity .22s cubic-bezier(.2,.85,.25,1),transform .28s cubic-bezier(.2,.85,.25,1)';
+    // the player underneath must not see these touches (no controls toggle, no gestures)
+    ['touchstart', 'touchmove', 'mousedown', 'mouseup', 'dblclick'].forEach(function (t) {
+      chev.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: true });
+    });
+    chev.addEventListener('touchstart', function () { chev.style.transform = 'scale(.88)'; }, { passive: true });
+    chev.addEventListener('touchend', function (e) {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();      // no ghost click on the page after fullscreen ends
+      minimiseFromFullscreen();
+    });
+    chev.addEventListener('click', function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      minimiseFromFullscreen();
+    });
+    fs.appendChild(chev);
+    void chev.offsetWidth;
+    chevShow();
+  }
+
+  /* wait until the rotation / relayout after leaving fullscreen has settled, then shrink */
+  function whenLayoutSettles(cb) {
+    var lastW = -1, lastH = -1, lastP = -1, still = 0, start = Date.now();
+    (function tick() {
+      var p = playerEl();
+      var ph = p ? p.getBoundingClientRect().height : 0;
+      if (window.innerWidth === lastW && window.innerHeight === lastH && ph === lastP) still++;
+      else still = 0;
+      lastW = window.innerWidth; lastH = window.innerHeight; lastP = ph;
+      if ((still >= 6 && Date.now() - start > 180) || Date.now() - start > 1000) { cb(); return; }
+      (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(tick);
+    })();
+  }
+
+  function minimiseFromFullscreen() {
+    if (minimising) return;
+    minimising = true;
+    chevHide();
+    var done = function () {
+      document.removeEventListener('fullscreenchange', onExit);
+      whenLayoutSettles(function () {
+        minimising = false;
+        if (fsEl() || !onWatch() || !window.ytproMini) return;
+        try { ytproMini.open(); } catch (e) {}
+      });
+    };
+    var onExit = function () { if (!fsEl()) done(); };
+    if (!fsEl()) { done(); return; }
+    document.addEventListener('fullscreenchange', onExit);
+    leaveFullscreen();
+    setTimeout(function () { if (minimising && !fsEl()) { document.removeEventListener('fullscreenchange', onExit); done(); } }, 1500);
+  }
+
+  /* any touch in fullscreen brings the chevron back for a few seconds */
+  window.addEventListener('touchstart', function (e) {
+    var fs = fsEl();
+    if (chev && fs && fs.contains(e.target) && e.target !== chev && !chev.contains(e.target)) chevShow();
+  }, { capture: true, passive: true });
+
   /* ---------- fullscreen transitions ---------- */
 
   document.addEventListener('fullscreenchange', function () {
+    if (!fsEl()) chevRemove();
     if (inPip()) return;
     if (fsEl()) {
       if (levelGesturesOn()) {
         var b = storedBrightness();
         if (b !== null) applyBrightness(b);   // remembered brightness, fullscreen only
       }
+      chevAdd();
     } else {
+      chevRemove();
       resetBrightness();                       // back to the system brightness
       endSpeed();
       if (zoomed) setZoom(false);
