@@ -12,6 +12,8 @@
  *  - a tap opens the video again, the x button stops it and closes the window;
  *  - picking a video in the list opens it as the main video.
  * The player is scaled with a transform (YouTube does not relayout it), like upstream's minimize().
+ * Motion: the window follows the finger during the swipe, then every change glides with an
+ * ease-out curve (open, expand, close, cancelled swipe); the list fades in and out.
  */
 (function () {
   'use strict';
@@ -31,7 +33,7 @@
     radius: 10
   };
 
-  var mini = null;        // { s, x, y, w0, h0, style }
+  var mini = null;        // floating window: { s, x, y, w0, h0 }
   var iframe = null;
   var closeBtn = null;
   var touch = null;       // current gesture on the window
@@ -80,8 +82,8 @@
       }
     } catch (e) {}
 
-    // YTPro itself and the Hide Shorts module also work in the list
-    ['script.js', 'ytpro-noshorts.js'].forEach(function (f) {
+    // YTPro itself, Hide Shorts and panel animations also work in the list
+    ['script.js', 'ytpro-noshorts.js', 'ytpro-motion.js'].forEach(function (f) {
       var s = d.createElement('script');
       s.src = 'https://youtube.com/ytpro_local/' + f;
       d.body.appendChild(s);
@@ -115,66 +117,89 @@
     iframe = document.createElement('iframe');
     iframe.id = 'ytproMiniList';
     iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;border:0;margin:0;' +
-      'z-index:' + Z_LIST + ';background:' + bgColor() + ';display:block';
+      'z-index:' + Z_LIST + ';background:' + bgColor() + ';display:none;opacity:0';
     iframe.addEventListener('load', wireIframe);
     iframe.src = 'https://m.youtube.com/';
     document.body.appendChild(iframe);
     return iframe;
   }
 
-  /* ---------- window geometry ---------- */
+  /* ---------- motion ---------- */
 
-  function sMin() { return CFG.minFrac * vw() / mini.w0; }
-  function sMax() { return CFG.maxFrac * vw() / mini.w0; }
+  var EASE_OUT = 'cubic-bezier(.2,.85,.25,1)';    // quick start, long soft landing
+  var EASE_IN = 'cubic-bezier(.5,0,.75,0)';
+  var DUR = { open: 380, expand: 360, settle: 300, close: 240, list: 300 };
+  var reduced = false;
+  try { reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+  function ms(d) { return reduced ? 0 : d; }
 
-  function clampPos() {
-    var w = mini.w0 * mini.s, h = mini.h0 * mini.s;
-    mini.x = clamp(mini.x, 0, Math.max(0, vw() - w));
-    mini.y = clamp(mini.y, 0, Math.max(0, vh() - h));
+  var det = null;         // detached player: { style, L, T, w0, h0, spacer }
+  var prev = null;        // live swipe preview (before the window opens): { x, y, s }
+  var anim = false;       // an animation is running: touches on the window are ignored
+  var animToken = 0;
+  var listWanted = false;
+
+  function transformOf(x, y, s) {
+    return 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
   }
 
-  function render() {
-    var p = playerEl();
-    if (!p || !mini) return;
-    clampPos();
-    p.style.setProperty('transform', 'translate(' + mini.x + 'px,' + mini.y + 'px) scale(' + mini.s + ')', 'important');
-    p.style.setProperty('border-radius', (CFG.radius / mini.s) + 'px', 'important');
-    if (closeBtn) {
-      closeBtn.style.left = (mini.x + mini.w0 * mini.s - 34) + 'px';
-      closeBtn.style.top = (mini.y + 6) + 'px';
+  /* Run a CSS transition on el; apply() sets the end state. */
+  function animateEl(el, d, ease, apply, done) {
+    var token = ++animToken;
+    var t = d ? ['transform', 'border-radius', 'box-shadow', 'opacity'].map(function (p) {
+      return p + ' ' + d + 'ms ' + ease;
+    }).join(',') : 'none';
+    el.style.setProperty('transition', t, 'important');
+    void el.offsetWidth;                         // commit the start state
+    apply();
+    var over = false;
+    function fin() {
+      if (over) return;
+      over = true;
+      el.removeEventListener('transitionend', onEnd);
+      if (token !== animToken) return;           // a newer animation took over
+      el.style.setProperty('transition', 'none', 'important');
+      if (done) done();
+    }
+    function onEnd(e) { if (e.target === el && e.propertyName === 'transform') fin(); }
+    el.addEventListener('transitionend', onEnd);
+    setTimeout(fin, d + 90);
+  }
+
+  function fadeList(show, d) {
+    listWanted = show;
+    var f = show ? ensureIframe() : iframe;
+    if (!f) return;
+    f.style.transition = 'opacity ' + ms(d) + 'ms ' + (show ? EASE_OUT : EASE_IN);
+    if (show) {
+      if (f.style.display === 'none') { f.style.opacity = '0'; f.style.display = 'block'; }
+      void f.offsetWidth;
+      f.style.opacity = '1';
+    } else {
+      f.style.opacity = '0';
+      setTimeout(function () { if (!listWanted && f.isConnected) f.style.display = 'none'; }, ms(d) + 40);
     }
   }
 
-  function ensureCloseBtn() {
-    if (closeBtn && closeBtn.isConnected) return;
-    closeBtn = document.createElement('div');
-    closeBtn.id = 'ytproMiniClose';
-    closeBtn.textContent = '✕';
-    closeBtn.style.cssText = 'position:fixed;width:28px;height:28px;border-radius:14px;' +
-      'background:rgba(0,0,0,.6);color:#fff;font:600 15px/28px system-ui,sans-serif;text-align:center;' +
-      'z-index:' + Z_BTN + ';touch-action:none;-webkit-user-select:none;user-select:none';
-    document.body.appendChild(closeBtn);
-  }
-
-  /* ---------- open / expand / close ---------- */
-
-  function open() {
-    if (mini || document.fullscreenElement || !onWatch()) return false;
+  /* Take the player out of the page flow (fixed, transform-driven) without a visual jump. */
+  function detach() {
+    if (det) return det;
     var p = playerEl();
-    if (!p) return false;
+    if (!p) return null;
     var r = p.getBoundingClientRect();
-    if (!r.width || !r.height) return false;
-
-    var w0 = r.width, h0 = r.height;
-    var s0 = clamp(CFG.startFrac * vw() / w0, CFG.minFrac * vw() / w0, CFG.maxFrac * vw() / w0);
-    mini = {
-      s: s0, w0: w0, h0: h0,
-      x: vw() - w0 * s0 - CFG.margin,
-      y: vh() - h0 * s0 - CFG.margin - CFG.bottomGap,
-      style: p.getAttribute('style')
-    };
-
-    ensureIframe().style.display = 'block';
+    var w0 = p.offsetWidth || r.width, h0 = p.offsetHeight || r.height;
+    if (!w0 || !h0) return null;
+    var pos = '';
+    try { pos = getComputedStyle(p).position; } catch (e) {}
+    var spacer = null;
+    if (pos !== 'fixed' && pos !== 'absolute') {
+      // keep the page below the player where it was
+      spacer = document.createElement('div');
+      spacer.id = 'ytproMiniSpacer';
+      spacer.style.cssText = 'width:100%;height:' + h0 + 'px;flex:none';
+      p.parentNode.insertBefore(spacer, p);
+    }
+    det = { style: p.getAttribute('style'), L: r.left, T: r.top, w0: w0, h0: h0, spacer: spacer };
     var css = p.style;
     css.setProperty('position', 'fixed', 'important');
     css.setProperty('top', '0', 'important');
@@ -187,49 +212,216 @@
     css.setProperty('z-index', String(Z_WIN), 'important');
     css.setProperty('transform-origin', '0 0', 'important');
     css.setProperty('overflow', 'hidden', 'important');
-    css.setProperty('box-shadow', '0 6px 24px rgba(0,0,0,.55)', 'important');
+    css.setProperty('will-change', 'transform', 'important');
     css.setProperty('transition', 'none', 'important');
-    ensureCloseBtn();
-    render();
+    css.setProperty('transform', transformOf(r.left, r.top, 1), 'important');
+    return det;
+  }
+
+  /* Put the player back exactly as YouTube had it. */
+  function attach() {
+    var p = playerEl();
+    if (det) {
+      if (p) { if (det.style === null) p.removeAttribute('style'); else p.setAttribute('style', det.style); }
+      if (det.spacer) det.spacer.remove();
+    }
+    det = null;
+    prev = null;
+  }
+
+  function setLook(p, s, k) {
+    // k = 0 (in the page) .. 1 (floating window): corner radius and shadow follow
+    p.style.setProperty('border-radius', (CFG.radius * k / s) + 'px', 'important');
+    p.style.setProperty('box-shadow', '0 ' + (8 * k / s) + 'px ' + (28 * k / s) + 'px rgba(0,0,0,' + (0.55 * k) + ')', 'important');
+  }
+
+  /* ---------- window geometry ---------- */
+
+  function sMin() { return CFG.minFrac * vw() / mini.w0; }
+  function sMax() { return CFG.maxFrac * vw() / mini.w0; }
+
+  function target(w0, h0) {
+    var s = clamp(CFG.startFrac * vw() / w0, CFG.minFrac * vw() / w0, CFG.maxFrac * vw() / w0);
+    return { s: s, x: vw() - w0 * s - CFG.margin, y: vh() - h0 * s - CFG.margin - CFG.bottomGap };
+  }
+
+  function clampPos() {
+    var w = mini.w0 * mini.s, h = mini.h0 * mini.s;
+    mini.x = clamp(mini.x, 0, Math.max(0, vw() - w));
+    mini.y = clamp(mini.y, 0, Math.max(0, vh() - h));
+  }
+
+  function placeCloseBtn() {
+    if (!closeBtn || !mini) return;
+    closeBtn.style.left = (mini.x + mini.w0 * mini.s - 34) + 'px';
+    closeBtn.style.top = (mini.y + 6) + 'px';
+  }
+
+  function render() {
+    var p = playerEl();
+    if (!p || !mini) return;
+    clampPos();
+    p.style.setProperty('transform', transformOf(mini.x, mini.y, mini.s), 'important');
+    setLook(p, mini.s, 1);
+    placeCloseBtn();
+  }
+
+  function ensureCloseBtn() {
+    if (closeBtn && closeBtn.isConnected) return;
+    closeBtn = document.createElement('div');
+    closeBtn.id = 'ytproMiniClose';
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'position:fixed;width:28px;height:28px;border-radius:14px;' +
+      'background:rgba(0,0,0,.6);color:#fff;font:600 15px/28px system-ui,sans-serif;text-align:center;' +
+      'z-index:' + Z_BTN + ';touch-action:none;-webkit-user-select:none;user-select:none;' +
+      'opacity:0;transform:scale(.6);transition:opacity ' + ms(220) + 'ms ' + EASE_OUT + ',transform ' + ms(260) + 'ms ' + EASE_OUT;
+    document.body.appendChild(closeBtn);
+  }
+
+  function showCloseBtn(show) {
+    if (!closeBtn) return;
+    void closeBtn.offsetWidth;
+    closeBtn.style.opacity = show ? '1' : '0';
+    closeBtn.style.transform = show ? 'scale(1)' : 'scale(.6)';
+  }
+
+  /* ---------- live swipe (called by ytpro-gestures.js while the finger moves) ---------- */
+
+  /* k in [-1, 1]: > 0 swipe down toward the window, < 0 swipe up (a small lift toward fullscreen) */
+  function preview(k) {
+    if (mini || anim || document.fullscreenElement || !onWatch()) return;
+    var d = det || detach();
+    if (!d) return;
+    var p = playerEl();
+    var x, y, s;
+    if (k >= 0) {
+      var t = target(d.w0, d.h0);
+      s = 1 + (t.s - 1) * k;
+      x = d.L + (t.x - d.L) * k;
+      y = d.T + (t.y - d.T) * k;
+      setLook(p, s, k);
+      var f = ensureIframe();
+      listWanted = true;
+      f.style.transition = 'none';
+      f.style.display = 'block';
+      f.style.opacity = String(Math.min(1, k * 1.15));
+    } else {
+      var u = Math.min(1, -k);
+      s = 1 + 0.035 * u;
+      x = d.L - d.w0 * (s - 1) / 2;
+      y = d.T - d.h0 * (s - 1) / 2;
+      setLook(p, s, 0);
+      if (iframe) { listWanted = false; iframe.style.transition = 'none'; iframe.style.opacity = '0'; iframe.style.display = 'none'; }
+    }
+    prev = { x: x, y: y, s: s };
+    p.style.setProperty('transform', transformOf(x, y, s), 'important');
+  }
+
+  /* the swipe did not reach the threshold: glide back into the page */
+  function previewCancel(instant) {
+    if (mini || !det) return;
+    var p = playerEl();
+    var d = det;
+    if (iframe) fadeList(false, instant ? 0 : DUR.list);
+    if (!p || instant || reduced) { attach(); return; }
+    anim = true;
+    animateEl(p, DUR.settle, EASE_OUT, function () {
+      p.style.setProperty('transform', transformOf(d.L, d.T, 1), 'important');
+      setLook(p, 1, 0);
+    }, function () { anim = false; attach(); });
+  }
+
+  /* ---------- open / expand / close ---------- */
+
+  function open() {
+    if (mini || anim || document.fullscreenElement || !onWatch()) return false;
+    var d = det || detach();
+    if (!d) return false;
+    var p = playerEl();
+    var t = target(d.w0, d.h0);
+    mini = { s: t.s, x: t.x, y: t.y, w0: d.w0, h0: d.h0 };
     document.documentElement.classList.add('ytpro-mini');
+    fadeList(true, DUR.list);
+    ensureCloseBtn();
+    placeCloseBtn();
+    anim = true;
+    animateEl(p, ms(DUR.open), EASE_OUT, function () {
+      p.style.setProperty('transform', transformOf(mini.x, mini.y, mini.s), 'important');
+      setLook(p, mini.s, 1);
+    }, function () {
+      anim = false;
+      prev = null;
+      render();
+      showCloseBtn(true);
+    });
     return true;
   }
 
-  function restorePlayer() {
-    var p = playerEl();
-    if (p && mini) {
-      if (mini.style === null) p.removeAttribute('style'); else p.setAttribute('style', mini.style);
-    }
-    if (closeBtn) { closeBtn.remove(); closeBtn = null; }
-    document.documentElement.classList.remove('ytpro-mini');
-    mini = null;
-    touch = null;
+  function dropCloseBtn() {
+    if (!closeBtn) return;
+    var b = closeBtn;
+    closeBtn = null;
+    b.style.opacity = '0';
+    b.style.transform = 'scale(.6)';
+    setTimeout(function () { b.remove(); }, ms(200) + 20);
   }
 
   /* back to the full watch page */
   function expand() {
-    if (!mini) return;
-    restorePlayer();
-    if (iframe) iframe.style.display = 'none';
+    if (!mini || anim) return;
+    var p = playerEl();
+    var d = det;
+    dropCloseBtn();
+    fadeList(false, DUR.list);
+    anim = true;
+    animateEl(p, ms(DUR.expand), EASE_OUT, function () {
+      p.style.setProperty('transform', transformOf(d.L, d.T, 1), 'important');
+      setLook(p, 1, 0);
+    }, function () {
+      anim = false;
+      mini = null;
+      touch = null;
+      attach();
+      document.documentElement.classList.remove('ytpro-mini');
+    });
   }
 
   /* stop the video, keep the list on screen */
   function close() {
-    if (!mini) return;
+    if (!mini || anim) return;
     var v = videoEl();
     try { if (v) v.pause(); } catch (e) {}
     var p = playerEl();
-    restorePlayer();
-    if (p) p.style.setProperty('visibility', 'hidden', 'important');
-    if (iframe) iframe.style.display = 'block';
+    var k = 0.82, cx = mini.x + mini.w0 * mini.s * (1 - k) / 2, cy = mini.y + mini.h0 * mini.s * (1 - k) / 2;
+    dropCloseBtn();
+    anim = true;
+    animateEl(p, ms(DUR.close), EASE_IN, function () {
+      p.style.setProperty('transform', transformOf(cx, cy, mini.s * k), 'important');
+      p.style.setProperty('opacity', '0', 'important');
+    }, function () {
+      anim = false;
+      mini = null;
+      touch = null;
+      attach();
+      var q = playerEl();
+      if (q) q.style.setProperty('visibility', 'hidden', 'important');
+      document.documentElement.classList.remove('ytpro-mini');
+    });
   }
 
-  /* the main page leaves the watch page (back button etc.): drop everything */
+  /* the main page leaves the watch page (back button etc.): drop everything at once */
   function teardown(removeList) {
-    restorePlayer();
+    ++animToken;
+    anim = false;
+    mini = null;
+    touch = null;
+    if (closeBtn) { closeBtn.remove(); closeBtn = null; }
+    attach();
+    document.documentElement.classList.remove('ytpro-mini');
     var p = playerEl();
     if (p && p.style.visibility === 'hidden') p.style.removeProperty('visibility');
     if (iframe) {
+      listWanted = false;
       if (removeList !== false) { iframe.remove(); iframe = null; }
       else iframe.style.display = 'none';
     }
@@ -243,6 +435,7 @@
   }
 
   function onStart(e) {
+    if (anim && onWindow(e.target)) { swallow(e); return; }
     if (!mini) return;
     var t0 = e.touches[0];
     if (!touch) {
@@ -261,7 +454,7 @@
   }
 
   function onMove(e) {
-    if (!touch) return;
+    if (!touch || anim) { if (touch) swallow(e); return; }
     swallow(e);
     if (!mini) return;
     if (touch.mode === 'pinch') {
@@ -350,6 +543,8 @@
     open: open,
     expand: expand,
     close: close,
+    preview: preview,
+    previewCancel: previewCancel,
     back: back,
     isOpen: function () { return !!mini; }
   };

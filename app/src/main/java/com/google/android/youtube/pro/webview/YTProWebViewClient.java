@@ -26,7 +26,7 @@ public class YTProWebViewClient extends WebViewClient {
 	private final YTProWebView web;
 
 	// Fork-local modules (app/src/main/assets), read once and cached.
-	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-bgfix.js", "ytpro-miniplayer.js", "ytpro-gestures.js" };
+	private static final String[] FORK_MODULES = { "ytpro-noshorts.js", "ytpro-bgfix.js", "ytpro-motion.js", "ytpro-miniplayer.js", "ytpro-gestures.js" };
 	private static final java.util.Map<String, String> moduleCache = new java.util.HashMap<>();
 
 	public YTProWebViewClient(MainActivity activity, YTProWebView web) {
@@ -156,7 +156,7 @@ public class YTProWebViewClient extends WebViewClient {
 			int cut = name.indexOf('?');
 			if (cut >= 0) name = name.substring(0, cut);
 			if (name.equals("script.js") || name.equals("bgplay.js") || name.equals("innertube.js")
-					|| name.equals("ytpro-noshorts.js")) {
+					|| name.equals("ytpro-noshorts.js") || name.equals("ytpro-motion.js")) {
 				try {
 					Map<String, String> headers = new HashMap<>();
 					headers.put("Access-Control-Allow-Origin", "*");
@@ -225,7 +225,14 @@ public class YTProWebViewClient extends WebViewClient {
 	}
 	
 	@Override
+	public void onPageCommitVisible(WebView view, String url) {
+		activity.onWebReady();
+		super.onPageCommitVisible(view, url);
+	}
+	
+	@Override
 	public void onPageFinished(WebView view, String url) {
+		activity.onWebReady();
 		web.evaluateJavascript("if (window.trustedTypes && window.trustedTypes.createPolicy && !window.trustedTypes.defaultPolicy) {window.trustedTypes.createPolicy('default', {createHTML: (string) => string,createScriptURL: string => string, createScript: string => string, });}", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/script.js'; document.body.appendChild(script);  })();", null);
 		web.evaluateJavascript("(function () { var script = document.createElement('script'); script.src='https://youtube.com/ytpro_local/bgplay.js'; document.body.appendChild(script);  })();", null);

@@ -11,6 +11,10 @@ import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.ViewTreeObserver;
+import android.view.animation.DecelerateInterpolator;
 import android.util.Rational;
 import android.view.View;
 import android.view.WindowManager;
@@ -41,6 +45,10 @@ public class MainActivity extends Activity {
     public boolean dL = false;
 
     private YTProWebView web;
+
+    // Splash: kept on screen until the first YouTube page is painted (or 4 s), then dissolves.
+    private boolean webReady = false;
+    private static final long SPLASH_MAX_MS = 4000;
     private MediaCommandReceiver broadcastReceiver;
     private OnBackInvokedCallback backCallback;
     public BinaryStreamManager streamManager;
@@ -51,8 +59,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.main);
-        // The theme's window background carries the pre-Android 12 splash logo; drop it once the UI is up.
-        getWindow().setBackgroundDrawableResource(R.color.splash);
+        setupSplash();
         
         SharedPreferences prefs = getSharedPreferences("YTPRO", MODE_PRIVATE);
         if (!prefs.contains("bgplay")) {
@@ -68,6 +75,7 @@ public class MainActivity extends Activity {
         
         this.dL = dl;
         web = findViewById(R.id.web);
+        if (Build.VERSION.SDK_INT < 31 && !webReady) web.setAlpha(0f);   // revealed by onWebReady()
         // Keep the renderer process important while the screen is off, otherwise the system may
         // throttle or freeze it and background playback stops.
         if (Build.VERSION.SDK_INT >= 26) {
@@ -143,6 +151,44 @@ public class MainActivity extends Activity {
             };
             dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
         }
+    }
+
+    private void setupSplash() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            // Hold the system splash until the page is ready, then fade it out with a gentle zoom.
+            final View content = findViewById(android.R.id.content);
+            content.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    if (!webReady) return false;
+                    content.getViewTreeObserver().removeOnPreDrawListener(this);
+                    return true;
+                }
+            });
+            getSplashScreen().setOnExitAnimationListener(splashView -> {
+                View icon = splashView.getIconView();
+                if (icon != null) {
+                    icon.animate().scaleX(1.18f).scaleY(1.18f).alpha(0f)
+                            .setDuration(380).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+                }
+                splashView.animate().alpha(0f).setStartDelay(60).setDuration(420)
+                        .setInterpolator(new DecelerateInterpolator(1.4f))
+                        .withEndAction(splashView::remove).start();
+            });
+        }
+        // Never wait forever (offline, slow network).
+        new Handler(Looper.getMainLooper()).postDelayed(this::onWebReady, SPLASH_MAX_MS);
+    }
+
+    /** Called by YTProWebViewClient when the first page is visible. */
+    public void onWebReady() {
+        if (webReady) return;
+        webReady = true;
+        if (Build.VERSION.SDK_INT >= 31) return;   // system splash exit animation does the rest
+        // Before Android 12 the "splash" is the window background behind the WebView: fade the page in over it.
+        if (web == null) return;
+        web.animate().alpha(1f).setDuration(420).setInterpolator(new DecelerateInterpolator(1.6f))
+                .withEndAction(() -> getWindow().setBackgroundDrawableResource(R.color.splash)).start();
     }
 
     private void handleBackPress() {

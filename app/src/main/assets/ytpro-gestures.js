@@ -100,18 +100,24 @@
       hudEl.style.cssText = 'position:fixed;padding:6px 14px;border-radius:18px;' +
         'background:rgba(0,0,0,.65);color:#fff;font:600 14px/1.2 system-ui,sans-serif;' +
         'pointer-events:none;z-index:2147483647;white-space:nowrap;' +
-        'transform:translateX(-50%);transition:opacity .15s;opacity:0';
+        'transform:translateX(-50%) scale(.9);opacity:0;' +
+        'transition:opacity .18s cubic-bezier(.2,.85,.25,1),transform .24s cubic-bezier(.2,.85,.25,1)';
     }
     if (hudEl.parentNode !== host) host.appendChild(hudEl);
     hudEl.style.left = (ref.left + ref.width / 2) + 'px';
     hudEl.style.top = (ref.top + Math.max(12, ref.height * 0.12)) + 'px';
     hudEl.textContent = text;
     hudEl.style.opacity = '1';
+    hudEl.style.transform = 'translateX(-50%) scale(1)';
     clearTimeout(hudTimer);
     if (!sticky) hudTimer = setTimeout(hudHide, CFG.hudMs);
   }
 
-  function hudHide() { if (hudEl) hudEl.style.opacity = '0'; }
+  function hudHide() {
+    if (!hudEl) return;
+    hudEl.style.opacity = '0';
+    hudEl.style.transform = 'translateX(-50%) scale(.9)';
+  }
 
   /* ---------- actions ---------- */
 
@@ -129,6 +135,21 @@
   }
 
   /* System PiP is entered by MainActivity when the app is minimised; the swipe opens the in-app window. */
+  function mini() { return window.ytproMini || null; }
+
+  /* the player follows the finger: down shrinks it toward the window, up lifts it slightly */
+  function dragPreview(dy, T) {
+    var m = mini();
+    if (!m || typeof m.preview !== 'function') return;
+    var k = dy >= 0 ? clamp(dy / (window.innerHeight * 0.45), 0, 1) : -clamp(-dy / (T * 2), 0, 1);
+    try { m.preview(k); } catch (e) {}
+  }
+
+  function dragRelease(instant) {
+    var m = mini();
+    if (m && typeof m.previewCancel === 'function') { try { m.previewCancel(instant); } catch (e) {} }
+  }
+
   function goMini() {
     if (window.ytproMini && typeof ytproMini.open === 'function') {
       try { ytproMini.open(); } catch (e) {}
@@ -166,6 +187,7 @@
       if (k < 1.01) k = 1;
     }
     holder.style.transformOrigin = 'center center';
+    holder.style.transition = 'transform .32s cubic-bezier(.2,.85,.25,1)';
     holder.style.transform = 'scale(' + k + ')';
     zoomed = k > 1;
     // keep upstream's own zoom state consistent so it does not fight us
@@ -324,8 +346,8 @@
         levelApply(st.mode, st.level);
         break;
       case 'drag':
+        dragPreview(dy, threshold(st));
         if (dy <= -threshold(st)) hud('⤢ Release: fullscreen', true);
-        else if (dy >= threshold(st)) hud('⧉ Release: miniplayer', true);
         else hudHide();
         break;
       case 'exit':
@@ -372,13 +394,15 @@
       return;
     }
     hudHide();
-    if (cancelled) return;
-
     var T = threshold(s);
     if (s.mode === 'drag') {
-      if (dy <= -T) goFullscreen();
-      else if (dy >= T) goMini();
-    } else if (s.mode === 'exit') {
+      if (!cancelled && dy >= T) { goMini(); return; }        // glides on from where the finger left it
+      if (!cancelled && dy <= -T) { dragRelease(true); goFullscreen(); return; }
+      dragRelease(false);                                      // not far enough: glide back
+      return;
+    }
+    if (cancelled) return;
+    if (s.mode === 'exit') {
       if (dy >= T) leaveFullscreen();
     }
   }
