@@ -10,6 +10,7 @@
  *  - Normal mode, on video  : swipe up = fullscreen, swipe down = in-app miniplayer (ytpro-miniplayer.js)
  *  - Any mode, hold still   : 2x speed while the finger is down
  *  - Fullscreen, pinch      : spread = fill screen, pinch in = reset
+ *  - Fullscreen, chevron button (top-left): leave fullscreen and shrink into the miniplayer
  *
  * Actions that need a user activation (requestFullscreen) run on touchend.
  */
@@ -407,16 +408,130 @@
     }
   }
 
+  /* ---------- fullscreen chevron: minimise to the in-app window ---------- */
+
+  var chev = null;
+  var chevTimer = null;
+  var CHEV_MS = 3000;          // auto-hide after this much inactivity
+  var minimising = false;
+
+  function chevShow() {
+    if (!chev) return;
+    chev.style.opacity = '1';
+    chev.style.transform = 'scale(1)';
+    chev.style.pointerEvents = 'auto';
+    clearTimeout(chevTimer);
+    chevTimer = setTimeout(chevHide, CHEV_MS);
+  }
+
+  function chevHide() {
+    if (!chev) return;
+    chev.style.opacity = '0';
+    chev.style.transform = 'scale(.8)';
+    chev.style.pointerEvents = 'none';
+  }
+
+  function chevRemove() {
+    clearTimeout(chevTimer);
+    if (chev) { chev.remove(); chev = null; }
+  }
+
+  /* 12px from the edge, more when a notch / rounded corner needs it */
+  function inset(side) {
+    var v = 'max(12px,env(safe-area-inset-' + side + '))';
+    try { if (window.CSS && CSS.supports && CSS.supports('top', v)) return v; } catch (e) {}
+    return '12px';
+  }
+
+  function chevAdd() {
+    var fs = fsEl();
+    if (!fs || chev || inPip() || !onWatch()) return;
+    if (fs.tagName === 'VIDEO' || !window.ytproMini) return;   // a <video> cannot hold the button
+    chev = document.createElement('button');
+    chev.id = 'ytproFsChevron';
+    chev.setAttribute('aria-label', 'Minimise');
+    chev.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">' +
+      '<path d="M5.5 8.5 12 15l6.5-6.5" fill="none" stroke="#fff" stroke-width="2.4" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    chev.style.cssText = 'position:absolute;z-index:2147483646;width:44px;height:44px;padding:0;margin:0;' +
+      'top:' + inset('top') + ';left:' + inset('left') + ';' +
+      'display:flex;align-items:center;justify-content:center;border:0;border-radius:22px;' +
+      'background:rgba(0,0,0,.42);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);' +
+      'box-shadow:0 2px 10px rgba(0,0,0,.35);touch-action:none;-webkit-tap-highlight-color:transparent;' +
+      'opacity:0;transform:scale(.8);pointer-events:none;' +
+      'transition:opacity .22s cubic-bezier(.2,.85,.25,1),transform .28s cubic-bezier(.2,.85,.25,1)';
+    // the player underneath must not see these touches (no controls toggle, no gestures)
+    ['touchstart', 'touchmove', 'mousedown', 'mouseup', 'dblclick'].forEach(function (t) {
+      chev.addEventListener(t, function (e) { e.stopPropagation(); }, { passive: true });
+    });
+    chev.addEventListener('touchstart', function () { chev.style.transform = 'scale(.88)'; }, { passive: true });
+    chev.addEventListener('touchend', function (e) {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();      // no ghost click on the page after fullscreen ends
+      minimiseFromFullscreen();
+    });
+    chev.addEventListener('click', function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      minimiseFromFullscreen();
+    });
+    fs.appendChild(chev);
+    void chev.offsetWidth;
+    chevShow();
+  }
+
+  /* wait until the rotation / relayout after leaving fullscreen has settled, then shrink */
+  function whenLayoutSettles(cb) {
+    var lastW = -1, lastH = -1, lastP = -1, still = 0, start = Date.now();
+    (function tick() {
+      var p = playerEl();
+      var ph = p ? p.getBoundingClientRect().height : 0;
+      if (window.innerWidth === lastW && window.innerHeight === lastH && ph === lastP) still++;
+      else still = 0;
+      lastW = window.innerWidth; lastH = window.innerHeight; lastP = ph;
+      if ((still >= 6 && Date.now() - start > 180) || Date.now() - start > 1000) { cb(); return; }
+      (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(tick);
+    })();
+  }
+
+  function minimiseFromFullscreen() {
+    if (minimising) return;
+    minimising = true;
+    chevHide();
+    var done = function () {
+      document.removeEventListener('fullscreenchange', onExit);
+      whenLayoutSettles(function () {
+        minimising = false;
+        if (fsEl() || !onWatch() || !window.ytproMini) return;
+        try { ytproMini.open(); } catch (e) {}
+      });
+    };
+    var onExit = function () { if (!fsEl()) done(); };
+    if (!fsEl()) { done(); return; }
+    document.addEventListener('fullscreenchange', onExit);
+    leaveFullscreen();
+    setTimeout(function () { if (minimising && !fsEl()) { document.removeEventListener('fullscreenchange', onExit); done(); } }, 1500);
+  }
+
+  /* any touch in fullscreen brings the chevron back for a few seconds */
+  window.addEventListener('touchstart', function (e) {
+    var fs = fsEl();
+    if (chev && fs && fs.contains(e.target) && e.target !== chev && !chev.contains(e.target)) chevShow();
+  }, { capture: true, passive: true });
+
   /* ---------- fullscreen transitions ---------- */
 
   document.addEventListener('fullscreenchange', function () {
+    if (!fsEl()) chevRemove();
     if (inPip()) return;
     if (fsEl()) {
       if (levelGesturesOn()) {
         var b = storedBrightness();
         if (b !== null) applyBrightness(b);   // remembered brightness, fullscreen only
       }
+      chevAdd();
     } else {
+      chevRemove();
       resetBrightness();                       // back to the system brightness
       endSpeed();
       if (zoomed) setZoom(false);
