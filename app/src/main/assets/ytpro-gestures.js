@@ -513,6 +513,9 @@
     setTimeout(function () { if (minimising && !fsEl()) { document.removeEventListener('fullscreenchange', onExit); done(); } }, 1500);
   }
 
+  /* used by the back button in fullscreen (ytpro-miniplayer.js) */
+  window.ytproFs = { minimise: minimiseFromFullscreen };
+
   /* any touch in fullscreen brings the chevron back for a few seconds */
   window.addEventListener('touchstart', function (e) {
     var fs = fsEl();

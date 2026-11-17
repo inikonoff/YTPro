@@ -11,6 +11,8 @@
  *  - two fingers resize it, from 30 % up to 90 % of the screen width;
  *  - a tap opens the video again, the x button stops it and closes the window;
  *  - picking a video in the list opens it as the main video.
+ * Back button / swipe on a video page minimises the video into the window (the list shows the
+ * page the video was opened from); further backs walk the list, then leave the miniplayer.
  * The player is scaled with a transform (YouTube does not relayout it), like upstream's minimize().
  * Motion: the window follows the finger during the swipe, then every change glides with an
  * ease-out curve (open, expand, close, cancelled swipe); the list fades in and out.
@@ -57,7 +59,25 @@
 
   /* ---------- the list (iframe) ---------- */
 
+  /* the list shows the page the video was opened from (search, subscriptions, channel...) */
+  var LIST_KEY = 'ytproMiniListUrl';
+  function isListUrl(u) {
+    return u.pathname.indexOf('/watch') !== 0 && u.pathname.indexOf('/shorts') !== 0;
+  }
+  function rememberList(href) {
+    try {
+      var u = new URL(href, location.href);
+      if (u.hostname.indexOf('youtube.com') > -1 && isListUrl(u)) sessionStorage.setItem(LIST_KEY, u.href);
+    } catch (e) {}
+  }
+  function listUrl() {
+    var u = null;
+    try { u = sessionStorage.getItem(LIST_KEY); } catch (e) {}
+    return u || 'https://m.youtube.com/';
+  }
+
   function openTop(url) {
+    try { if (iframe) rememberList(iframe.contentWindow.location.href); } catch (e) {}
     teardown(false);
     location.href = url;
   }
@@ -119,7 +139,7 @@
     iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;border:0;margin:0;' +
       'z-index:' + Z_LIST + ';background:' + bgColor() + ';display:none;opacity:0';
     iframe.addEventListener('load', wireIframe);
-    iframe.src = 'https://m.youtube.com/';
+    iframe.src = listUrl();
     document.body.appendChild(iframe);
     return iframe;
   }
@@ -513,8 +533,11 @@
 
   // leaving the watch page (back button, links on the page) closes the miniplayer
   function onRoute() {
+    rememberList(location.href);
     if (!onWatch() && (mini || iframe)) teardown(true);
   }
+  rememberList(location.href);
+  if (document.referrer) rememberList(document.referrer);
   if (window.navigation && navigation.addEventListener) {
     navigation.addEventListener('navigatesuccess', onRoute);
   }
@@ -524,16 +547,40 @@
   /* Android back button (asked by MainActivity before WebView.goBack). Returns true when handled.
      Uses the Navigation API so only the right frame's own history is walked: the list iframe
      would otherwise leave invisible entries in WebView's joint history. */
-  function back() {
-    if (!iframe || !iframe.isConnected) return false;
-    var visible = iframe.style.display !== 'none';
+  function hasVideo() {
+    var v = videoEl();
+    return !!(v && (v.currentSrc || v.src || v.getAttribute('src')) && !v.ended);
+  }
+
+  function listCanGoBack() {
+    if (!iframe || !iframe.isConnected || iframe.style.display === 'none') return null;
     var w = null;
     try { w = iframe.contentWindow; } catch (e) {}
-    if (visible && w && w.navigation && w.navigation.canGoBack) {
-      w.navigation.back();
+    return (w && w.navigation && w.navigation.canGoBack) ? w : null;
+  }
+
+  function back() {
+    if (anim) return true;                                  // let the current motion finish
+    var lw;
+    if (mini) {
+      if ((lw = listCanGoBack())) { lw.navigation.back(); return true; }
+      // at the start of the list: leave the miniplayer and go back in the app
+      teardown(true);
+      if (window.navigation && navigation.canGoBack) { navigation.back(); return true; }
+      return false;
+    }
+    if (document.fullscreenElement) {
+      // watching in fullscreen: same as the chevron (smooth exit, then into the window)
+      if (onWatch() && hasVideo() && window.ytproFs && typeof ytproFs.minimise === 'function') {
+        ytproFs.minimise();
+      } else {
+        try { document.exitFullscreen(); } catch (e) {}
+      }
       return true;
     }
-    if (mini) { expand(); return true; }
+    if (onWatch() && hasVideo() && open()) return true;      // watching: minimise into the window
+    if (!iframe || !iframe.isConnected) return false;
+    if ((lw = listCanGoBack())) { lw.navigation.back(); return true; }
     teardown(true);
     if (window.navigation && navigation.canGoBack) { navigation.back(); return true; }
     return false;
