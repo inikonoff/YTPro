@@ -167,7 +167,8 @@
   var listWanted = false;
 
   function transformOf(x, y, s) {
-    return 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+    // translate3d keeps the window on its own GPU layer in older WebViews too
+    return 'translate3d(' + x + 'px,' + y + 'px,0) scale(' + s + ')';
   }
 
   /* Compositor-only motion: transform and opacity, nothing that repaints per frame. */

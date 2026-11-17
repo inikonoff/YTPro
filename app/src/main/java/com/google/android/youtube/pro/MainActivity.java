@@ -40,6 +40,9 @@ public class MainActivity extends Activity {
 
     public boolean portrait = false;
     public boolean isPlaying = false;
+    // Android 12+: the system enters PiP by itself (with its own smooth animation) when the user
+    // leaves the app while a video plays; kept in sync with playback and the current page.
+    private boolean pipAutoEnter = false;
     public boolean mediaSession = false;
     public boolean isPip = false;
     public boolean dL = false;
@@ -247,7 +250,37 @@ public class MainActivity extends Activity {
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         isPip = isInPictureInPictureMode;
+        if (!isInPictureInPictureMode && Build.VERSION.SDK_INT >= 31) {
+            updatePipParams(true);          // PiP ended: set the params again from the current state
+        }
         web.evaluateJavascript(isInPictureInPictureMode ? "PIPlayer();" : "removePIP();", null);
+    }
+
+    /** Playback state from the page (bgStart/bgPlay/bgPause...). Updates the auto-PiP setting. */
+    public void setPlaying(boolean playing) {
+        isPlaying = playing;
+        if (Build.VERSION.SDK_INT >= 31) runOnUiThread(() -> updatePipParams(false));
+    }
+
+    private boolean onVideoPage() {
+        String u = web != null ? web.getUrl() : null;
+        return u != null && (u.contains("watch") || u.contains("shorts"));
+    }
+
+    private void updatePipParams(boolean force) {
+        if (Build.VERSION.SDK_INT < 31 || web == null || isPip) return;
+        boolean auto = isPlaying && onVideoPage();
+        if (auto == pipAutoEnter && !force) return;
+        pipAutoEnter = auto;
+        try {
+            setPictureInPictureParams(new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(portrait ? 9 : 16, portrait ? 16 : 9))
+                    .setAutoEnterEnabled(auto)
+                    .setSeamlessResizeEnabled(false)      // recommended for video content
+                    .build());
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            pipAutoEnter = false;
+        }
     }
 
     @Override
@@ -274,10 +307,13 @@ public class MainActivity extends Activity {
          up.recycle();
          web.loadUrl( "javascript:hideCurtain();");
                  
-                    PictureInPictureParams params = new PictureInPictureParams.Builder()
-                            .setAspectRatio(new Rational(portrait ? 9 : 16, portrait ? 16 : 9))
-                            .build();
-                    enterPictureInPictureMode(params);
+                    // Android 12+ with auto-enter: the system is already animating into PiP.
+                    if (!(Build.VERSION.SDK_INT >= 31 && pipAutoEnter)) {
+                        PictureInPictureParams params = new PictureInPictureParams.Builder()
+                                .setAspectRatio(new Rational(portrait ? 9 : 16, portrait ? 16 : 9))
+                                .build();
+                        enterPictureInPictureMode(params);
+                    }
                 } catch (IllegalStateException e) {
                     e.printStackTrace();
                 }

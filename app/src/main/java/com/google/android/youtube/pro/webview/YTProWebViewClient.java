@@ -246,7 +246,7 @@ public class YTProWebViewClient extends WebViewClient {
 
 
 		if (!url.contains("youtube.com/watch") && !url.contains("youtube.com/shorts") && activity.isPlaying) {
-			activity.isPlaying = false;
+			activity.setPlaying(false);
 			activity.mediaSession = false;
 			activity.stopService(new Intent(activity.getApplicationContext(), ForegroundService.class));
 		}

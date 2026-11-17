@@ -140,7 +140,7 @@ public class WebAppInterface {
 	@JavascriptInterface
 	public void bgStart(String iconn, String titlen, String subtitlen, long dura) {
 		icon = iconn; title = titlen; subtitle = subtitlen; duration = dura;
-		activity.isPlaying = true; activity.mediaSession = true;
+		activity.mediaSession = true; activity.setPlaying(true);
 		
 		Intent intent = new Intent(activity.getApplicationContext(), ForegroundService.class);
 		intent.putExtra("icon", icon); intent.putExtra("title", title);
@@ -152,31 +152,31 @@ public class WebAppInterface {
 	@JavascriptInterface
 	public void bgUpdate(String iconn, String titlen, String subtitlen, long dura) {
 		icon = iconn; title = titlen; subtitle = subtitlen; duration = dura;
-		activity.isPlaying = true;
+		activity.setPlaying(true);
 		sendUpdateBroadcast(0, "pause");
 	}
 	
 	@JavascriptInterface
 	public void bgStop() {
-		activity.isPlaying = false; activity.mediaSession = false;
+		activity.mediaSession = false; activity.setPlaying(false);
 		activity.stopService(new Intent(activity.getApplicationContext(), ForegroundService.class));
 	}
 	
 	@JavascriptInterface
 	public void bgPause(long ct) {
-		activity.isPlaying = false;
+		activity.setPlaying(false);
 		sendUpdateBroadcast(ct, "pause");
 	}
 	
 	@JavascriptInterface
 	public void bgPlay(long ct) {
-		activity.isPlaying = true;
+		activity.setPlaying(true);
 		sendUpdateBroadcast(ct, "play");
 	}
 	
 	@JavascriptInterface
 	public void bgBuffer(long ct) {
-		activity.isPlaying = true;
+		activity.setPlaying(true);
 		sendUpdateBroadcast(ct, "buffer");
 	}
 	
