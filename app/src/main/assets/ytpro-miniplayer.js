@@ -32,7 +32,8 @@
     margin: 12,           // px from the screen edges for the default position
     bottomGap: 64,        // keeps the default position above the list's bottom navigation
     slop: 10,
-    radius: 10
+    radius: 10,
+    preloadMs: 1500       // the list starts loading this long after a video page opens
   };
 
   var mini = null;        // floating window: { s, x, y, w0, h0 }
@@ -109,6 +110,11 @@
       d.body.appendChild(s);
     });
 
+    // feed previews must not play while the list is hidden
+    d.addEventListener('play', function (e) {
+      if (!listWanted && e.target && e.target.pause) { try { e.target.pause(); } catch (err) {} }
+    }, true);
+
     // a video picked in the list becomes the main video
     d.addEventListener('click', function (e) {
       var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
@@ -137,7 +143,8 @@
     iframe = document.createElement('iframe');
     iframe.id = 'ytproMiniList';
     iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;border:0;margin:0;' +
-      'z-index:' + Z_LIST + ';background:' + bgColor() + ';display:none;opacity:0';
+      'z-index:' + Z_LIST + ';background:' + bgColor() + ';display:block;opacity:0;' +
+      'visibility:hidden;pointer-events:none;will-change:opacity';
     iframe.addEventListener('load', wireIframe);
     iframe.src = listUrl();
     document.body.appendChild(iframe);
@@ -163,26 +170,43 @@
     return 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
   }
 
-  /* Run a CSS transition on el; apply() sets the end state. */
-  function animateEl(el, d, ease, apply, done) {
+  /* Compositor-only motion: transform and opacity, nothing that repaints per frame. */
+  function transitionOf(d, ease) {
+    return d ? 'transform ' + d + 'ms ' + ease + ',opacity ' + d + 'ms ' + ease : 'none';
+  }
+
+  /* Move the window (player + its shadow layer) to x, y, s; shadow opacity follows k (0..1). */
+  function paint(x, y, s, k) {
+    var p = playerEl();
+    if (p) p.style.setProperty('transform', transformOf(x, y, s), 'important');
+    if (shadow) {
+      shadow.style.transform = transformOf(x, y, s);
+      shadow.style.opacity = String(k);
+    }
+  }
+
+  /* extra(p) may set more end values (opacity) inside the same transition */
+  function animateTo(x, y, s, k, d, ease, done, extra) {
+    var p = playerEl();
     var token = ++animToken;
-    var t = d ? ['transform', 'border-radius', 'box-shadow', 'opacity'].map(function (p) {
-      return p + ' ' + d + 'ms ' + ease;
-    }).join(',') : 'none';
-    el.style.setProperty('transition', t, 'important');
-    void el.offsetWidth;                         // commit the start state
-    apply();
+    var t = transitionOf(d, ease);
+    if (p) p.style.setProperty('transition', t, 'important');
+    if (shadow) shadow.style.transition = t;
+    if (p) void p.offsetWidth;                   // commit the start state
+    paint(x, y, s, k);
+    if (extra && p) extra(p);
     var over = false;
     function fin() {
       if (over) return;
       over = true;
-      el.removeEventListener('transitionend', onEnd);
+      if (p) p.removeEventListener('transitionend', onEnd);
       if (token !== animToken) return;           // a newer animation took over
-      el.style.setProperty('transition', 'none', 'important');
+      if (p) p.style.setProperty('transition', 'none', 'important');
+      if (shadow) shadow.style.transition = 'none';
       if (done) done();
     }
-    function onEnd(e) { if (e.target === el && e.propertyName === 'transform') fin(); }
-    el.addEventListener('transitionend', onEnd);
+    function onEnd(e) { if (e.target === p && e.propertyName === 'transform') fin(); }
+    if (p) p.addEventListener('transitionend', onEnd);
     setTimeout(fin, d + 90);
   }
 
@@ -192,14 +216,52 @@
     if (!f) return;
     f.style.transition = 'opacity ' + ms(d) + 'ms ' + (show ? EASE_OUT : EASE_IN);
     if (show) {
-      if (f.style.display === 'none') { f.style.opacity = '0'; f.style.display = 'block'; }
+      f.style.visibility = 'visible';
+      f.style.pointerEvents = 'auto';
       void f.offsetWidth;
       f.style.opacity = '1';
     } else {
       f.style.opacity = '0';
-      setTimeout(function () { if (!listWanted && f.isConnected) f.style.display = 'none'; }, ms(d) + 40);
+      f.style.pointerEvents = 'none';
+      setTimeout(function () { if (!listWanted && f.isConnected) f.style.visibility = 'hidden'; }, ms(d) + 40);
     }
   }
+
+  function hideListNow() {
+    if (!iframe) return;
+    listWanted = false;
+    iframe.style.transition = 'none';
+    iframe.style.opacity = '0';
+    iframe.style.visibility = 'hidden';
+    iframe.style.pointerEvents = 'none';
+  }
+
+  /* Load the list in the background while the video plays, so opening the window costs nothing. */
+  var preloadTimer = 0;
+  function preloadList() {
+    clearTimeout(preloadTimer);
+    preloadTimer = setTimeout(function () {
+      if (!onWatch() || iframe) return;
+      var go = function () { if (onWatch() && !iframe) ensureIframe(); };
+      if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 3000 }); else go();
+    }, CFG.preloadMs);
+  }
+
+  /* The window's shadow lives on its own layer: drawn once, then only moved and faded. */
+  var shadow = null;
+  function ensureShadow(w0, h0, r) {
+    if (!shadow || !shadow.isConnected) {
+      shadow = document.createElement('div');
+      shadow.id = 'ytproMiniShadow';
+      document.body.appendChild(shadow);
+    }
+    shadow.style.cssText = 'position:fixed;top:0;left:0;margin:0;pointer-events:none;' +
+      'width:' + w0 + 'px;height:' + h0 + 'px;border-radius:' + r + 'px;' +
+      'box-shadow:0 ' + (r * 0.8) + 'px ' + (r * 2.8) + 'px rgba(0,0,0,.55);' +
+      'transform-origin:0 0;will-change:transform,opacity;opacity:0;transition:none;' +
+      'z-index:' + (Z_WIN - 1);
+  }
+  function dropShadow() { if (shadow) { shadow.remove(); shadow = null; } }
 
   /* Take the player out of the page flow (fixed, transform-driven) without a visual jump. */
   function detach() {
@@ -220,6 +282,8 @@
       p.parentNode.insertBefore(spacer, p);
     }
     det = { style: p.getAttribute('style'), L: r.left, T: r.top, w0: w0, h0: h0, spacer: spacer };
+    // corner radius chosen for the window size and set once (animating it would repaint every frame)
+    var radius = CFG.radius / target(w0, h0).s;
     var css = p.style;
     css.setProperty('position', 'fixed', 'important');
     css.setProperty('top', '0', 'important');
@@ -232,27 +296,43 @@
     css.setProperty('z-index', String(Z_WIN), 'important');
     css.setProperty('transform-origin', '0 0', 'important');
     css.setProperty('overflow', 'hidden', 'important');
-    css.setProperty('will-change', 'transform', 'important');
+    css.setProperty('border-radius', radius + 'px', 'important');
+    css.setProperty('will-change', 'transform,opacity', 'important');
+    css.setProperty('backface-visibility', 'hidden', 'important');
     css.setProperty('transition', 'none', 'important');
     css.setProperty('transform', transformOf(r.left, r.top, 1), 'important');
+    ensureShadow(w0, h0, radius);
+    paint(r.left, r.top, 1, 0);
     return det;
   }
 
   /* Put the player back exactly as YouTube had it. */
   function attach() {
+    cancelFrame();
+    pendingK = null;
     var p = playerEl();
     if (det) {
       if (p) { if (det.style === null) p.removeAttribute('style'); else p.setAttribute('style', det.style); }
       if (det.spacer) det.spacer.remove();
     }
+    dropShadow();
     det = null;
     prev = null;
   }
 
-  function setLook(p, s, k) {
-    // k = 0 (in the page) .. 1 (floating window): corner radius and shadow follow
-    p.style.setProperty('border-radius', (CFG.radius * k / s) + 'px', 'important');
-    p.style.setProperty('box-shadow', '0 ' + (8 * k / s) + 'px ' + (28 * k / s) + 'px rgba(0,0,0,' + (0.55 * k) + ')', 'important');
+  /* touch moves arrive faster than frames: apply only the latest one, once per frame */
+  var frame = 0, pendingK = null, pendingRender = false;
+  var raf = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : function (f) { return setTimeout(f, 16); };
+  var caf = window.cancelAnimationFrame ? window.cancelAnimationFrame.bind(window) : clearTimeout;
+  function cancelFrame() { if (frame) { caf(frame); frame = 0; } }
+  function onFrame() {
+    frame = 0;
+    if (pendingRender) { pendingRender = false; render(); }
+    else applyPreview();
+  }
+  function scheduleRender() {
+    pendingRender = true;
+    if (!frame) frame = raf(onFrame);
   }
 
   /* ---------- window geometry ---------- */
@@ -281,8 +361,7 @@
     var p = playerEl();
     if (!p || !mini) return;
     clampPos();
-    p.style.setProperty('transform', transformOf(mini.x, mini.y, mini.s), 'important');
-    setLook(p, mini.s, 1);
+    paint(mini.x, mini.y, mini.s, 1);
     placeCloseBtn();
   }
 
@@ -310,45 +389,52 @@
   /* k in [-1, 1]: > 0 swipe down toward the window, < 0 swipe up (a small lift toward fullscreen) */
   function preview(k) {
     if (mini || anim || document.fullscreenElement || !onWatch()) return;
-    var d = det || detach();
-    if (!d) return;
-    var p = playerEl();
+    if (!(det || detach())) return;
+    if (k > 0 && !iframe) ensureIframe();
+    pendingK = k;
+    if (!frame) frame = raf(onFrame);
+  }
+
+  function applyPreview() {
+    var d = det, k = pendingK;
+    if (!d || k === null || mini) return;
     var x, y, s;
     if (k >= 0) {
       var t = target(d.w0, d.h0);
       s = 1 + (t.s - 1) * k;
       x = d.L + (t.x - d.L) * k;
       y = d.T + (t.y - d.T) * k;
-      setLook(p, s, k);
       var f = ensureIframe();
       listWanted = true;
       f.style.transition = 'none';
-      f.style.display = 'block';
+      f.style.visibility = 'visible';
       f.style.opacity = String(Math.min(1, k * 1.15));
+      paint(x, y, s, k);
     } else {
       var u = Math.min(1, -k);
       s = 1 + 0.035 * u;
       x = d.L - d.w0 * (s - 1) / 2;
       y = d.T - d.h0 * (s - 1) / 2;
-      setLook(p, s, 0);
-      if (iframe) { listWanted = false; iframe.style.transition = 'none'; iframe.style.opacity = '0'; iframe.style.display = 'none'; }
+      hideListNow();
+      paint(x, y, s, 0);
     }
     prev = { x: x, y: y, s: s };
-    p.style.setProperty('transform', transformOf(x, y, s), 'important');
+  }
+
+  /* make sure the last finger position is on screen before an animation starts from it */
+  function flushPreview() {
+    if (frame) { cancelFrame(); if (pendingRender) { pendingRender = false; render(); } else applyPreview(); }
   }
 
   /* the swipe did not reach the threshold: glide back into the page */
   function previewCancel(instant) {
     if (mini || !det) return;
-    var p = playerEl();
+    flushPreview();
     var d = det;
     if (iframe) fadeList(false, instant ? 0 : DUR.list);
-    if (!p || instant || reduced) { attach(); return; }
+    if (instant || reduced || !playerEl()) { attach(); return; }
     anim = true;
-    animateEl(p, DUR.settle, EASE_OUT, function () {
-      p.style.setProperty('transform', transformOf(d.L, d.T, 1), 'important');
-      setLook(p, 1, 0);
-    }, function () { anim = false; attach(); });
+    animateTo(d.L, d.T, 1, 0, DUR.settle, EASE_OUT, function () { anim = false; attach(); });
   }
 
   /* ---------- open / expand / close ---------- */
@@ -357,7 +443,7 @@
     if (mini || anim || document.fullscreenElement || !onWatch()) return false;
     var d = det || detach();
     if (!d) return false;
-    var p = playerEl();
+    flushPreview();
     var t = target(d.w0, d.h0);
     mini = { s: t.s, x: t.x, y: t.y, w0: d.w0, h0: d.h0 };
     document.documentElement.classList.add('ytpro-mini');
@@ -365,10 +451,7 @@
     ensureCloseBtn();
     placeCloseBtn();
     anim = true;
-    animateEl(p, ms(DUR.open), EASE_OUT, function () {
-      p.style.setProperty('transform', transformOf(mini.x, mini.y, mini.s), 'important');
-      setLook(p, mini.s, 1);
-    }, function () {
+    animateTo(mini.x, mini.y, mini.s, 1, ms(DUR.open), EASE_OUT, function () {
       anim = false;
       prev = null;
       render();
@@ -389,15 +472,11 @@
   /* back to the full watch page */
   function expand() {
     if (!mini || anim) return;
-    var p = playerEl();
     var d = det;
     dropCloseBtn();
     fadeList(false, DUR.list);
     anim = true;
-    animateEl(p, ms(DUR.expand), EASE_OUT, function () {
-      p.style.setProperty('transform', transformOf(d.L, d.T, 1), 'important');
-      setLook(p, 1, 0);
-    }, function () {
+    animateTo(d.L, d.T, 1, 0, ms(DUR.expand), EASE_OUT, function () {
       anim = false;
       mini = null;
       touch = null;
@@ -411,14 +490,10 @@
     if (!mini || anim) return;
     var v = videoEl();
     try { if (v) v.pause(); } catch (e) {}
-    var p = playerEl();
     var k = 0.82, cx = mini.x + mini.w0 * mini.s * (1 - k) / 2, cy = mini.y + mini.h0 * mini.s * (1 - k) / 2;
     dropCloseBtn();
     anim = true;
-    animateEl(p, ms(DUR.close), EASE_IN, function () {
-      p.style.setProperty('transform', transformOf(cx, cy, mini.s * k), 'important');
-      p.style.setProperty('opacity', '0', 'important');
-    }, function () {
+    animateTo(cx, cy, mini.s * k, 0, ms(DUR.close), EASE_IN, function () {
       anim = false;
       mini = null;
       touch = null;
@@ -426,7 +501,7 @@
       var q = playerEl();
       if (q) q.style.setProperty('visibility', 'hidden', 'important');
       document.documentElement.classList.remove('ytpro-mini');
-    });
+    }, function (p) { p.style.setProperty('opacity', '0', 'important'); });
   }
 
   /* the main page leaves the watch page (back button etc.): drop everything at once */
@@ -443,7 +518,7 @@
     if (iframe) {
       listWanted = false;
       if (removeList !== false) { iframe.remove(); iframe = null; }
-      else iframe.style.display = 'none';
+      else hideListNow();
     }
   }
 
@@ -486,7 +561,7 @@
       mini.x = c.x - (touch.c0.x - touch.mx) * (s / touch.s0);
       mini.y = c.y - (touch.c0.y - touch.my) * (s / touch.s0);
       mini.s = s;
-      render();
+      scheduleRender();
       return;
     }
     var t = e.touches[0];
@@ -498,13 +573,14 @@
     if (touch.mode === 'drag') {
       mini.x = touch.mx + dx;
       mini.y = touch.my + dy;
-      render();
+      scheduleRender();
     }
   }
 
   function onEnd(e) {
     if (!touch) return;
     swallow(e);
+    if (pendingRender) flushPreview();
     if (e.touches.length > 0) {
       // one finger left after a pinch: continue as a drag from here
       if (touch.mode === 'pinch' && mini) {
@@ -534,10 +610,12 @@
   // leaving the watch page (back button, links on the page) closes the miniplayer
   function onRoute() {
     rememberList(location.href);
+    if (onWatch()) preloadList();
     if (!onWatch() && (mini || iframe)) teardown(true);
   }
   rememberList(location.href);
   if (document.referrer) rememberList(document.referrer);
+  if (onWatch()) preloadList();
   if (window.navigation && navigation.addEventListener) {
     navigation.addEventListener('navigatesuccess', onRoute);
   }
@@ -553,7 +631,7 @@
   }
 
   function listCanGoBack() {
-    if (!iframe || !iframe.isConnected || iframe.style.display === 'none') return null;
+    if (!iframe || !iframe.isConnected || !listWanted) return null;
     var w = null;
     try { w = iframe.contentWindow; } catch (e) {}
     return (w && w.navigation && w.navigation.canGoBack) ? w : null;

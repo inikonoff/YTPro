@@ -10,6 +10,7 @@ import android.os.Build;
 import android.animation.ValueAnimator;
 import android.view.ViewGroup;
 import android.view.animation.AccelerateInterpolator;
+import android.graphics.Color;
 import android.view.animation.DecelerateInterpolator;
 import android.view.View;
 import android.view.WindowManager;
@@ -27,6 +28,9 @@ public class YTProWebChromeClient extends WebChromeClient {
     
     private View mCustomView;
     private FrameLayout mCustomHolder;
+    // Black layer above everything for "dip to black" fullscreen transitions. The video is drawn on
+    // its own surface, which ignores alpha/scale of its parents, so the transition fades a cover instead.
+    private View mCurtain;
     private WebChromeClient.CustomViewCallback mCustomViewCallback;
     private int mOriginalOrientation;
     private int mOriginalSystemUiVisibility;
@@ -82,12 +86,10 @@ public class YTProWebChromeClient extends WebChromeClient {
         mCustomHolder.addView(mCustomView, new FrameLayout.LayoutParams(-1, -1));
         ((FrameLayout) activity.getWindow().getDecorView()).addView(mCustomHolder, new FrameLayout.LayoutParams(-1, -1));
         if (animate()) {
-            // Smooth entry: fade in from a slightly smaller video.
-            mCustomHolder.setAlpha(0f);
-            mCustomHolder.setScaleX(0.94f);
-            mCustomHolder.setScaleY(0.94f);
-            mCustomHolder.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(300)
-                    .setInterpolator(new DecelerateInterpolator(2.2f)).start();
+            // Smooth entry: start covered, let the rotation and the first video frame land, then reveal.
+            View c = curtain(1f);
+            c.animate().alpha(0f).setStartDelay(140).setDuration(340)
+                    .setInterpolator(new DecelerateInterpolator(1.8f)).withEndAction(this::dropCurtain).start();
         }
         activity.getWindow().getDecorView().setSystemUiVisibility(3846);
     }
@@ -110,10 +112,15 @@ public class YTProWebChromeClient extends WebChromeClient {
                 decor.removeView(holder);
             };
             if (animate()) {
-                // Smooth exit: the fullscreen layer dissolves over the page.
-                holder.animate().cancel();
-                holder.animate().alpha(0f).scaleX(0.97f).scaleY(0.97f).setDuration(220)
-                        .setInterpolator(new AccelerateInterpolator(1.4f)).withEndAction(drop).start();
+                // Smooth exit: dip to black, swap back to the page behind the cover, reveal it.
+                View c = curtain(null);
+                c.animate().alpha(1f).setStartDelay(0).setDuration(150)
+                        .setInterpolator(new AccelerateInterpolator(1.2f)).withEndAction(() -> {
+                            drop.run();
+                            c.animate().alpha(0f).setStartDelay(140).setDuration(340)
+                                    .setInterpolator(new DecelerateInterpolator(1.8f))
+                                    .withEndAction(this::dropCurtain).start();
+                        }).start();
             } else {
                 drop.run();
             }
@@ -131,6 +138,32 @@ public class YTProWebChromeClient extends WebChromeClient {
 
         mCustomViewCallback = null;
         web.clearFocus();
+    }
+
+    /** The cover view, added on top of the window; alpha == null keeps the current one. */
+    private View curtain(Float alpha) {
+        FrameLayout decor = (FrameLayout) activity.getWindow().getDecorView();
+        if (mCurtain == null) {
+            mCurtain = new View(activity);
+            mCurtain.setBackgroundColor(Color.BLACK);
+            mCurtain.setClickable(false);
+            mCurtain.setAlpha(0f);
+        }
+        mCurtain.animate().cancel();
+        if (mCurtain.getParent() != decor) {
+            if (mCurtain.getParent() instanceof ViewGroup) ((ViewGroup) mCurtain.getParent()).removeView(mCurtain);
+            decor.addView(mCurtain, new FrameLayout.LayoutParams(-1, -1));
+        } else {
+            mCurtain.bringToFront();
+        }
+        if (alpha != null) mCurtain.setAlpha(alpha);
+        return mCurtain;
+    }
+
+    private void dropCurtain() {
+        if (mCurtain == null) return;
+        mCurtain.animate().cancel();
+        if (mCurtain.getParent() instanceof ViewGroup) ((ViewGroup) mCurtain.getParent()).removeView(mCurtain);
     }
 
     /** No fade in PiP (tiny window) or when the user turned system animations off. */

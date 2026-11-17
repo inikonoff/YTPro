@@ -89,7 +89,8 @@ public class MainActivity extends Activity {
         web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setDatabaseEnabled(true);
         web.getSettings().setMediaPlaybackRequiresUserGesture(false); 
-        web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        // No LAYER_TYPE_HARDWARE: an offscreen layer around WebView re-renders the whole page into an
+        // extra buffer every frame and makes animations stutter. WebView is GPU-accelerated without it.
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
