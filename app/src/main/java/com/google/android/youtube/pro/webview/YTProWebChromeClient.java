@@ -74,8 +74,9 @@ public class YTProWebChromeClient extends WebChromeClient {
         // 2. Set the activity to full screen orientation (Landscape usually)
         activity.setRequestedOrientation(mOriginalOrientation);
         
-        // Store portrait so onHideCustomView knows what to go back to
-        mOriginalOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        // What onHideCustomView goes back to: portrait on phones, free rotation on tablets
+        mOriginalOrientation = activity.normalOrientation();
+        activity.onFullscreenChanged(true);
 
         mCustomViewCallback = viewCallback;
         // The fullscreen view gets its own window-visibility events. Without this wrapper a locked
@@ -130,6 +131,7 @@ public class YTProWebChromeClient extends WebChromeClient {
         
         // 3. Set the activity BACK to the orientation saved right after going full screen (Portrait)
         activity.setRequestedOrientation(mOriginalOrientation);
+        activity.onFullscreenChanged(false);
         
         // Reset state for the next time we enter full screen
         mOriginalOrientation = activity.portrait ?

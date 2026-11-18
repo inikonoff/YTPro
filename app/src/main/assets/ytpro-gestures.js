@@ -11,6 +11,8 @@
  *  - Any mode, hold still   : 2x speed while the finger is down
  *  - Fullscreen, pinch      : spread = fill screen, pinch in = reset
  *  - Fullscreen, chevron button (top-left): leave fullscreen and shrink into the miniplayer
+ *  - Rotate the phone to landscape on a video: fullscreen; back to portrait: the mode it came from
+ *    (page or miniplayer). The rotation itself is detected by MainActivity (ytproAutoFs).
  *
  * Actions that need a user activation (requestFullscreen) run on touchend.
  */
@@ -516,6 +518,57 @@
   /* used by the back button in fullscreen (ytpro-miniplayer.js) */
   window.ytproFs = { minimise: minimiseFromFullscreen };
 
+  /* ---------- rotate to fullscreen (driven by MainActivity's orientation sensor) ---------- */
+
+  var autoOrigin = null;      // 'page' | 'mini' while in a fullscreen opened by rotation
+  var shieldEl = null;
+  var shieldTimer = 0;
+
+  function shield(on) {
+    clearTimeout(shieldTimer);
+    if (!on) { if (shieldEl) { shieldEl.remove(); shieldEl = null; } return true; }
+    if (fsEl() || inPip() || !onWatch()) return false;
+    var v = videoEl();
+    if (!v || v.ended || !(v.currentSrc || v.src)) return false;
+    if (v.videoHeight > v.videoWidth) return false;          // vertical video: stays as it is
+    if (!shieldEl) {
+      // catches the synthetic activation tap so it lands on nothing
+      shieldEl = document.createElement('div');
+      shieldEl.id = 'ytproRotateShield';
+      shieldEl.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;' +
+        'z-index:2147483647;background:transparent;touch-action:none';
+      ['touchstart', 'touchmove', 'touchend', 'click', 'mousedown', 'mouseup'].forEach(function (t) {
+        shieldEl.addEventListener(t, function (e) { e.stopPropagation(); if (e.cancelable) e.preventDefault(); });
+      });
+      document.body.appendChild(shieldEl);
+    }
+    shieldTimer = setTimeout(function () { shield(false); }, 1500);   // never left behind
+    return true;
+  }
+
+  function autoEnter() {
+    shield(false);
+    if (fsEl() || inPip() || !onWatch()) return false;
+    var v = videoEl();
+    if (!v || v.videoHeight > v.videoWidth) return false;
+    var m = window.ytproMini;
+    var fromMini = !!(m && m.isOpen && m.isOpen());
+    if (fromMini && typeof m.collapse === 'function') m.collapse();   // back into the page at once
+    autoOrigin = fromMini ? 'mini' : 'page';
+    goFullscreen();
+    return true;
+  }
+
+  function autoExit() {
+    if (!fsEl()) return;
+    var o = autoOrigin;
+    autoOrigin = null;
+    if (o === 'mini') minimiseFromFullscreen();             // smooth exit, then back into the window
+    else leaveFullscreen();
+  }
+
+  window.ytproAutoFs = { shield: shield, enter: autoEnter, exit: autoExit };
+
   /* any touch in fullscreen brings the chevron back for a few seconds */
   window.addEventListener('touchstart', function (e) {
     var fs = fsEl();
@@ -535,6 +588,7 @@
       chevAdd();
     } else {
       chevRemove();
+      if (!minimising) autoOrigin = null;
       resetBrightness();                       // back to the system brightness
       endSpeed();
       if (zoomed) setZoom(false);

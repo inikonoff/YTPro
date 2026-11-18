@@ -505,6 +505,19 @@
     }, function (p) { p.style.setProperty('opacity', '0', 'important'); });
   }
 
+  /* back into the page at once, list kept loaded (rotation to fullscreen covers the jump) */
+  function collapse() {
+    if (!mini && !det) return;
+    ++animToken;
+    anim = false;
+    mini = null;
+    touch = null;
+    if (closeBtn) { closeBtn.remove(); closeBtn = null; }
+    attach();
+    hideListNow();
+    document.documentElement.classList.remove('ytpro-mini');
+  }
+
   /* the main page leaves the watch page (back button etc.): drop everything at once */
   function teardown(removeList) {
     ++animToken;
@@ -671,6 +684,7 @@
     close: close,
     preview: preview,
     previewCancel: previewCancel,
+    collapse: collapse,
     back: back,
     isOpen: function () { return !!mini; }
   };

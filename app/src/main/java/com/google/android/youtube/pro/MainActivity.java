@@ -33,6 +33,9 @@ import com.google.android.youtube.pro.webview.WebAppInterface;
 import com.google.android.youtube.pro.webview.BinaryStreamManager;
 import android.view.MotionEvent;
 import android.os.SystemClock;
+import android.view.OrientationEventListener;
+import android.provider.Settings;
+import android.content.pm.ActivityInfo;
 
 import com.google.android.youtube.pro.receivers.MediaCommandReceiver;
 
@@ -43,6 +46,16 @@ public class MainActivity extends Activity {
     // Android 12+: the system enters PiP by itself (with its own smooth animation) when the user
     // leaves the app while a video plays; kept in sync with playback and the current page.
     private boolean pipAutoEnter = false;
+
+    // Rotate to fullscreen: turning the phone to landscape on a video opens fullscreen, turning it
+    // back to portrait returns to the mode the video came from (page or miniplayer). Phones only.
+    public boolean inFullscreen = false;
+    private OrientationEventListener rotation;
+    private int posture = 0;                 // 0 unknown, 1 portrait, 2 landscape (physical device)
+    private boolean sawLandscapeInFs = false;
+    private final Handler rotationHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingPosture;
+    private static final long POSTURE_MS = 350;   // the new posture must hold this long
     public boolean mediaSession = false;
     public boolean isPip = false;
     public boolean dL = false;
@@ -78,6 +91,7 @@ public class MainActivity extends Activity {
         
         this.dL = dl;
         web = findViewById(R.id.web);
+        setupRotation();
         if (Build.VERSION.SDK_INT < 31 && !webReady) web.setAlpha(0f);   // revealed by onWebReady()
         // Keep the renderer process important while the screen is off, otherwise the system may
         // throttle or freeze it and background playback stops.
@@ -321,9 +335,85 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Orientation of the app outside fullscreen: portrait on phones (rotation is handled as a gesture). */
+    public int normalOrientation() {
+        return isPhone() ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+    }
+
+    private boolean isPhone() {
+        return getResources().getConfiguration().smallestScreenWidthDp < 600;
+    }
+
+    private boolean autoRotateOn() {
+        try {
+            return Settings.System.getInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 0) == 1;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void setupRotation() {
+        if (!isPhone()) return;
+        setRequestedOrientation(normalOrientation());
+        rotation = new OrientationEventListener(this) {
+            @Override
+            public void onOrientationChanged(int angle) {
+                if (angle == ORIENTATION_UNKNOWN) return;          // lying flat
+                int p;
+                if (angle >= 330 || angle <= 30) p = 1;
+                else if ((angle >= 60 && angle <= 120) || (angle >= 240 && angle <= 300)) p = 2;
+                else return;                                         // between the zones: keep the last one
+                if (p == posture) { if (pendingPosture != null) { rotationHandler.removeCallbacks(pendingPosture); pendingPosture = null; } return; }
+                if (pendingPosture != null) rotationHandler.removeCallbacks(pendingPosture);
+                final int next = p;
+                pendingPosture = () -> { pendingPosture = null; onPosture(next); };
+                rotationHandler.postDelayed(pendingPosture, POSTURE_MS);
+            }
+        };
+    }
+
+    private void onPosture(int p) {
+        int was = posture;
+        posture = p;
+        if (p == 2 && inFullscreen) sawLandscapeInFs = true;
+        if (was == 0 || isPip || web == null || !autoRotateOn()) return;
+        if (p == 2 && !inFullscreen && onVideoPage()) {
+            // Fullscreen needs a user gesture: a synthetic tap on a transparent shield, then enter.
+            web.evaluateJavascript("window.ytproAutoFs && ytproAutoFs.shield(true)", v -> {
+                if (!"true".equals(v)) return;
+                long t = SystemClock.uptimeMillis();
+                float x = web.getWidth() / 2f, y = web.getHeight() / 2f;
+                MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0);
+                MotionEvent up = MotionEvent.obtain(t, t + 15, MotionEvent.ACTION_UP, x, y, 0);
+                web.dispatchTouchEvent(down);
+                web.dispatchTouchEvent(up);
+                down.recycle();
+                up.recycle();
+                rotationHandler.postDelayed(() ->
+                        web.evaluateJavascript("window.ytproAutoFs && ytproAutoFs.enter()", null), 60);
+            });
+        } else if (p == 1 && inFullscreen && sawLandscapeInFs) {
+            web.evaluateJavascript("window.ytproAutoFs && ytproAutoFs.exit()", null);
+        }
+    }
+
+    /** Called by YTProWebChromeClient when fullscreen starts or ends. */
+    public void onFullscreenChanged(boolean on) {
+        inFullscreen = on;
+        sawLandscapeInFs = on && posture == 2;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (rotation != null && rotation.canDetectOrientation()) rotation.enable();
+    }
+
     @Override
     protected void onPause() {
         super.onPause();
+        if (rotation != null) rotation.disable();
+        if (pendingPosture != null) { rotationHandler.removeCallbacks(pendingPosture); pendingPosture = null; }
         CookieManager.getInstance().flush();
     }
 
