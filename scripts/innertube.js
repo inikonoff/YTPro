@@ -194,12 +194,16 @@ const player = yt.session.player;
 const streamingData = info.streaming_data;
   
 
+const title = info.basic_info.title || videoId;
+addCaptionTranscript(ytproDownDiv.querySelector("#captionsViewDiv"),
+  info.captions?.caption_tracks ?? [], videoId, title);
+
 if (!streamingData || !player) { 
 window.Android?.showToast?.('No streaming data or player found.'); 
 return; 
 }
 
-const safeTitle = info.basic_info.title.replace(/[\/\\?%*:|"<>]/g, '-');
+const safeTitle = title.replace(/[\/\\?%*:|"<>]/g, '-');
 
 // Fallback size formatter just in case window.formatFileSize isn't ready
 const formatBytes = (bytes) => {
@@ -570,13 +574,201 @@ Android.downvid(el.dataset.title,el.dataset.url,"image/jpg");
 }
 
 
+function captionTimestamp(milliseconds) {
+  const seconds = Math.floor(milliseconds / 1000);
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map(part => String(part).padStart(2, "0")).join(":");
+}
+
+function readCaptionCues(events) {
+  return (events ?? []).flatMap(event => {
+    const text = (event.segs ?? []).map(segment => segment.utf8 ?? "").join("")
+      .replace(/\s+/g, " ").trim();
+    if (!text || !Number.isFinite(event.tStartMs) || event.tStartMs < 0) return [];
+    return [{ milliseconds: event.tStartMs, text }];
+  }).sort((a, b) => a.milliseconds - b.milliseconds);
+}
+
+function addCaptionTranscript(view, captions, videoId, title) {
+  const tracks = captions.filter(track => {
+    if (!track.base_url) return false;
+    return track.kind === "asr" || track.vss_id?.startsWith("a.") ||
+      new URL(track.base_url, location.href).searchParams.get("kind") === "asr";
+  });
+  const panel = document.createElement("section");
+  view.prepend(panel);
+  panel.style.marginBottom = "16px";
+
+  if (!tracks.length) {
+    panel.textContent = "Автоматические субтитры недоступны.";
+    return;
+  }
+
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "Язык автоматических субтитров");
+  for (const [index, track] of tracks.entries()) {
+    select.add(new Option(track.name?.text || track.language_code || "Дорожка " + (index + 1), index));
+  }
+  const russian = tracks.findIndex(track => {
+    const language = track.language_code || new URL(track.base_url, location.href).searchParams.get("lang");
+    return /^ru(?:-|$)/i.test(language ?? "");
+  });
+  select.selectedIndex = Math.max(0, russian);
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "Поиск по тексту";
+  search.setAttribute("aria-label", search.placeholder);
+
+  const timestamps = document.createElement("input");
+  timestamps.type = "checkbox";
+  timestamps.checked = true;
+  const timeLabel = document.createElement("label");
+  timeLabel.append(timestamps, " Таймкоды в файле");
+
+  const save = document.createElement("button");
+  save.textContent = "Сохранить текст";
+  const summarize = document.createElement("button");
+  summarize.textContent = "Пересказать с Gemini";
+  const saveSummary = document.createElement("button");
+  saveSummary.textContent = "Сохранить пересказ";
+  saveSummary.hidden = true;
+
+  const retry = document.createElement("button");
+  retry.textContent = "Повторить загрузку";
+  retry.hidden = true;
+  const status = document.createElement("p");
+  status.setAttribute("role", "status");
+  const rows = document.createElement("div");
+  rows.style.cssText = "max-height:240px;overflow:auto;text-align:left";
+  const result = document.createElement("div");
+  result.style.cssText = "white-space:pre-wrap;text-align:left;overflow-wrap:anywhere";
+  panel.append("Автоматические субтитры ", select, status, retry, search, rows,
+    timeLabel, save, summarize, result, saveSummary);
+
+  const videoUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
+  let cues = [];
+  let summary = "";
+  let request;
+  let loadedTrack = null;
+  const currentVideo = () => (new URLSearchParams(location.search).get("v") ||
+    location.pathname.match(/^\/shorts\/([^/]+)/)?.[1]) === videoId;
+  const showTime = milliseconds => {
+    const button = document.createElement("button");
+    button.textContent = captionTimestamp(milliseconds);
+    button.onclick = () => {
+      const video = document.querySelector("video.video-stream, video");
+      if (video && currentVideo()) video.currentTime = milliseconds / 1000;
+    };
+    return button;
+  };
+
+  function renderRows() {
+    const query = search.value.trim().toLocaleLowerCase();
+    const fragment = document.createDocumentFragment();
+    let matches = 0;
+    for (const cue of cues) {
+      if (query && !cue.text.toLocaleLowerCase().includes(query)) continue;
+      const row = document.createElement("div");
+      row.append(showTime(cue.milliseconds), " ", cue.text);
+      fragment.append(row);
+      matches++;
+    }
+    rows.replaceChildren(fragment);
+    if (query && !matches) rows.textContent = "Совпадений нет.";
+  }
+
+  function fileHeader() {
+    return [title, videoUrl, "Автоматические субтитры · " + select.selectedOptions[0].text].join("\n");
+  }
+
+  function exportText(suffix, text) {
+    Android.saveCaptionText(title + " - " + suffix + ".txt", fileHeader() + "\n\n" + text + "\n");
+  }
+
+  function transcript(withTimestamps) {
+    return cues.map(cue => withTimestamps
+      ? "[" + captionTimestamp(cue.milliseconds) + "] " + cue.text
+      : cue.text).join(withTimestamps ? "\n" : " ");
+  }
+
+  async function loadTrack() {
+    request?.abort();
+    const controller = new AbortController();
+    request = controller;
+    loadedTrack = null;
+    cues = [];
+    summary = "";
+    status.textContent = "Загрузка субтитров…";
+    retry.hidden = true;
+    rows.replaceChildren();
+    result.replaceChildren();
+    saveSummary.hidden = true;
+    search.disabled = save.disabled = summarize.disabled = true;
+
+    const url = new URL(tracks[select.selectedIndex].base_url, location.href);
+    url.searchParams.set("fmt", "json3");
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const loadedCues = readCaptionCues((await response.json()).events);
+      if (controller.signal.aborted || !panel.isConnected || !currentVideo()) return;
+      if (!loadedCues.length) {
+        status.textContent = "Дорожка не содержит текста.";
+        return;
+      }
+      cues = loadedCues;
+      loadedTrack = controller;
+      status.textContent = "";
+      search.disabled = save.disabled = summarize.disabled = false;
+      renderRows();
+    } catch {
+      if (!controller.signal.aborted && panel.isConnected && currentVideo()) {
+        status.textContent = "Не удалось загрузить субтитры.";
+        retry.hidden = false;
+      }
+    }
+  }
+
+  select.onchange = retry.onclick = loadTrack;
+  search.oninput = renderRows;
+  save.onclick = () => exportText("расшифровка", transcript(timestamps.checked));
+  saveSummary.onclick = () => exportText("пересказ", summary);
+  summarize.onclick = async () => {
+    const track = loadedTrack;
+    summarize.disabled = true;
+    status.textContent = "Gemini готовит пересказ…";
+    try {
+      const answer = await window.summarizeCaptions(transcript(true));
+      if (track !== loadedTrack || !panel.isConnected || !currentVideo()) return;
+      summary = answer;
+      const times = new Map(cues.map(cue => [captionTimestamp(cue.milliseconds), cue.milliseconds]));
+      result.replaceChildren();
+      for (const part of answer.split(/(\b\d{2,}:\d{2}:\d{2}\b)/)) {
+        result.append(times.has(part) ? showTime(times.get(part)) : part);
+      }
+      saveSummary.hidden = false;
+      status.textContent = "";
+    } catch (error) {
+      if (track === loadedTrack) status.textContent = error.message || "Не удалось получить пересказ Gemini.";
+    } finally {
+      if (track === loadedTrack) summarize.disabled = false;
+    }
+  };
+
+  // Load only when the captions tab is first opened.
+  const tab = view.parentElement.querySelector('[data-view="#captionsViewDiv"]');
+  if (view.style.display === "block") loadTrack();
+  else tab.addEventListener("click", loadTrack, { once: true });
+}
+
 function updateCaptions(){
 var div=ytproDownDiv.querySelector("#captionsViewDiv");
-div.innerHTML=`<style>cp{width:100%;height:auto;padding-bottom:8px;}c{height:45px;width:50px;padding-top:5px;background:${d};border-radius:10px;margin-left:10px;display:block}</style>`;
+const formats = document.createElement("div");
+div.append(formats);
+formats.innerHTML=`<style>cp{width:100%;height:auto;padding-bottom:8px;}c{height:45px;width:50px;padding-top:5px;background:${d};border-radius:10px;margin-left:10px;display:block}</style>`;
 
-var captions=info?.captions?.caption_tracks;
-
-if(!captions) return div.innerHTML=`No Captions Found`;
+var captions=info?.captions?.caption_tracks ?? [];
 
 var t=`Captions ${safeTitle} YTPRO`;
 
@@ -584,7 +776,7 @@ captions.forEach(cap=>{
 
 cap.baseUrl = cap.base_url.replace("&fmt=srv3","");
 
-div.innerHTML+=`
+formats.innerHTML+=`
 <span style="width:100px;text-align:left">${cap?.name?.text}</span> 
 <br><br>
 <div style="position:absolute;right:10px;display:flex">
@@ -600,14 +792,13 @@ div.innerHTML+=`
 
 
 
-div.addEventListener("click",(e)=>{
+formats.addEventListener("click",(e)=>{
 var el=e.target.closest("[data-url]");
 if(!el) return;
 
 Android.downvid(el.dataset.title+el.dataset.ext,el.dataset.url,"plain/text");
 
 });
-
 
 }
 

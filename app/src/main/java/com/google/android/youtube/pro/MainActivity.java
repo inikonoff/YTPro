@@ -37,9 +37,65 @@ import android.view.OrientationEventListener;
 import android.provider.Settings;
 import android.content.pm.ActivityInfo;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+
 import com.google.android.youtube.pro.receivers.MediaCommandReceiver;
 
 public class MainActivity extends Activity {
+
+    private static final int CREATE_CAPTION_FILE = 3107;
+    private File pendingCaptionFile;
+
+    public void saveCaptionText(String filename, String text) {
+        if (pendingCaptionFile != null) return;
+        try {
+            pendingCaptionFile = File.createTempFile("captions-", ".txt", getCacheDir());
+            try (OutputStream output = new java.io.FileOutputStream(pendingCaptionFile)) {
+                output.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            Intent picker = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            picker.addCategory(Intent.CATEGORY_OPENABLE);
+            picker.setType("text/plain");
+            picker.putExtra(Intent.EXTRA_TITLE, filename.replace('/', '-').replace('\\', '-'));
+            startActivityForResult(picker, CREATE_CAPTION_FILE);
+        } catch (IOException | RuntimeException error) {
+            if (pendingCaptionFile != null) pendingCaptionFile.delete();
+            pendingCaptionFile = null;
+            Toast.makeText(this, "Не удалось открыть сохранение файла.", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (pendingCaptionFile != null) state.putString("pendingCaptionFile", pendingCaptionFile.getName());
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != CREATE_CAPTION_FILE || pendingCaptionFile == null) return;
+        File source = pendingCaptionFile;
+        pendingCaptionFile = null;
+        try {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            try (FileInputStream input = new FileInputStream(source);
+                 OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                if (output == null) throw new IOException("Cannot open destination");
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            }
+            Toast.makeText(this, "Файл сохранён.", Toast.LENGTH_SHORT).show();
+        } catch (IOException | RuntimeException error) {
+            Toast.makeText(this, "Не удалось сохранить файл.", Toast.LENGTH_SHORT).show();
+        } finally {
+            source.delete();
+        }
+    }
 
     public boolean portrait = false;
     public boolean isPlaying = false;
@@ -74,6 +130,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            String filename = savedInstanceState.getString("pendingCaptionFile");
+            if (filename != null) pendingCaptionFile = new File(getCacheDir(), filename);
+        }
         setContentView(R.layout.main);
         setupSplash();
         

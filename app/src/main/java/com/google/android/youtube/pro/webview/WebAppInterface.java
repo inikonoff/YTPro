@@ -59,6 +59,11 @@ public class WebAppInterface {
 	}
 	
 	@JavascriptInterface
+	public void saveCaptionText(String filename, String text) {
+		activity.runOnUiThread(() -> activity.saveCaptionText(filename, text));
+	}
+
+	@JavascriptInterface
 	public void downvid(String name, String url, String m) {
 		DownloadUtils.downloadFile(activity, name, url, m);
 	}
