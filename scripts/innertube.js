@@ -599,10 +599,69 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
   });
   const panel = document.createElement("section");
   view.prepend(panel);
-  panel.style.marginBottom = "16px";
+  panel.className = "ytpro-caption-card";
+  if (isD) panel.classList.add("ytpro-caption-dark");
+  const style = document.createElement("style");
+  style.textContent = `
+    .ytpro-caption-card {
+      --surface: #f8fcfb; --field: #e8f1ee; --ink: #132923; --muted: #416158;
+      --accent: #00684f; --on-accent: #fff; --line: #cbded7; --error: #ac281f;
+      display: grid; gap: 12px; background: var(--surface); color: var(--ink);
+      padding: 16px; margin-bottom: 16px; border: 1px solid var(--line);
+      border-radius: 20px; text-align: left; font-size: 14px; line-height: 1.45;
+    }
+    .ytpro-caption-card.ytpro-caption-dark {
+      --surface: #192322; --field: #293734; --ink: #edf6f3; --muted: #afc5bd;
+      --accent: #89e3c9; --on-accent: #10372d; --line: #40554e; --error: #ffb4ab;
+    }
+    .ytpro-caption-card [hidden] { display: none !important; }
+    .ytpro-caption-card h3 { margin: 0; font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+    .ytpro-caption-card .ytpro-caption-meta { margin: 0 0 4px; font-weight: 600; color: var(--accent); }
+    .ytpro-caption-card button, .ytpro-caption-card select, .ytpro-caption-card input[type="search"] {
+      box-sizing: border-box; min-height: 44px; padding: 8px 11px; border: 1px solid var(--line);
+      border-radius: 10px; color: var(--ink); background: var(--field); font: inherit;
+    }
+    .ytpro-caption-card :is(button, select, input, summary):focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    .ytpro-caption-card button:disabled { opacity: .55; }
+    .ytpro-caption-card .ytpro-caption-primary {
+      color: var(--on-accent); background: var(--accent); border-color: var(--accent); font-weight: 650;
+    }
+    .ytpro-caption-card .ytpro-caption-status {
+      color: var(--muted); margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--field);
+    }
+    .ytpro-caption-card .ytpro-caption-status[data-error="true"] { color: var(--error); }
+    .ytpro-caption-card .ytpro-caption-tools {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    }
+    .ytpro-caption-card .ytpro-caption-source { display: grid; gap: 10px; }
+    .ytpro-caption-card details > summary { cursor: pointer; color: var(--accent); padding-block: 10px; }
+    .ytpro-caption-card .ytpro-caption-rows { max-height: 230px; overflow: auto; }
+    .ytpro-caption-card .ytpro-caption-row {
+      display: grid; grid-template-columns: max-content 1fr; align-items: baseline; gap: 9px;
+      padding-block: 4px; border-bottom: 1px solid var(--line);
+    }
+    .ytpro-caption-card .ytpro-caption-time {
+      padding: 4px 7px; min-height: 36px; color: var(--accent); font-variant-numeric: tabular-nums;
+    }
+    .ytpro-caption-card .ytpro-caption-result {
+      background: var(--field); padding: 14px; border-radius: 12px; white-space: pre-wrap;
+      overflow-wrap: anywhere; font-size: 15px; line-height: 1.6;
+    }
+  `;
+  panel.append(style);
+  const heading = document.createElement("header");
+  const meta = document.createElement("p");
+  meta.className = "ytpro-caption-meta";
+  meta.textContent = assistant ? "Groq · GPT OSS 20B" : "Автоматические субтитры";
+  const headingTitle = document.createElement("h3");
+  headingTitle.textContent = title;
+  heading.append(meta, headingTitle);
+  panel.append(heading);
 
   if (!tracks.length) {
-    panel.textContent = "Автоматические субтитры недоступны.";
+    panel.append("Автоматические субтитры недоступны.");
     return;
   }
 
@@ -632,6 +691,7 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
   save.textContent = "Сохранить текст";
   const summarize = document.createElement("button");
   summarize.textContent = "Пересказать с Groq";
+  summarize.className = "ytpro-caption-primary";
   const saveSummary = document.createElement("button");
   saveSummary.textContent = "Сохранить пересказ";
   saveSummary.hidden = true;
@@ -641,12 +701,35 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
   retry.hidden = true;
   const status = document.createElement("p");
   status.setAttribute("role", "status");
+  status.className = "ytpro-caption-status";
+  status.hidden = true;
+  function updateStatus(message = "", error = false) {
+    status.dataset.error = String(error);
+    status.textContent = message;
+    status.hidden = !message;
+  }
   const rows = document.createElement("div");
-  rows.style.cssText = "max-height:240px;overflow:auto;text-align:left";
+  rows.className = "ytpro-caption-rows";
   const result = document.createElement("div");
-  result.style.cssText = "white-space:pre-wrap;text-align:left;overflow-wrap:anywhere";
-  panel.append("Автоматические субтитры ", select, status, retry, search, rows,
-    timeLabel, save, summarize, result, saveSummary);
+  result.className = "ytpro-caption-result";
+  result.hidden = true;
+  const keySettings = document.createElement("button");
+  keySettings.textContent = "Ключ Groq";
+  keySettings.onclick = () => Android.openGroqSettings();
+  const actions = document.createElement("div");
+  actions.className = "ytpro-caption-tools";
+  actions.append(summarize, keySettings);
+  const exportOptions = document.createElement("div");
+  exportOptions.className = "ytpro-caption-tools";
+  exportOptions.append(save, timeLabel);
+  const source = document.createElement("div");
+  source.className = "ytpro-caption-source";
+  source.append(search, rows, exportOptions);
+  const transcriptDetails = document.createElement("details");
+  const sourceTitle = document.createElement("summary");
+  sourceTitle.textContent = "Расшифровка";
+  transcriptDetails.append(sourceTitle, source);
+  panel.append(select, actions, status, retry, result, saveSummary, assistant ? transcriptDetails : source);
 
   const videoUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(videoId);
   let cues = [];
@@ -659,6 +742,8 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
   const showTime = milliseconds => {
     const button = document.createElement("button");
     button.textContent = captionTimestamp(milliseconds);
+    button.className = "ytpro-caption-time";
+    button.setAttribute("aria-label", "Перейти к " + button.textContent);
     button.onclick = () => {
       const video = document.querySelector("video.video-stream, video");
       if (video && currentVideo()) video.currentTime = milliseconds / 1000;
@@ -673,7 +758,8 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
     for (const cue of cues) {
       if (query && !cue.text.toLocaleLowerCase().includes(query)) continue;
       const row = document.createElement("div");
-      row.append(showTime(cue.milliseconds), " ", cue.text);
+      row.className = "ytpro-caption-row";
+      row.append(showTime(cue.milliseconds), document.createTextNode(cue.text));
       fragment.append(row);
       matches++;
     }
@@ -702,10 +788,12 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
     loadedTrack = null;
     cues = [];
     summary = "";
-    status.textContent = "Загрузка субтитров…";
+    updateStatus("Загружаем субтитры…");
+    summarize.textContent = "Пересказать с Groq";
     retry.hidden = true;
     rows.replaceChildren();
     result.replaceChildren();
+    result.hidden = true;
     saveSummary.hidden = true;
     search.disabled = save.disabled = summarize.disabled = true;
 
@@ -717,12 +805,12 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
       const loadedCues = readCaptionCues((await response.json()).events);
       if (controller.signal.aborted || !panel.isConnected || !currentVideo()) return;
       if (!loadedCues.length) {
-        status.textContent = "Дорожка не содержит текста.";
+        updateStatus("Дорожка не содержит текста.", true);
         return;
       }
       cues = loadedCues;
       loadedTrack = controller;
-      status.textContent = "";
+      updateStatus();
       search.disabled = save.disabled = summarize.disabled = false;
       renderRows();
       if (autoSummarize) {
@@ -731,7 +819,7 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
       }
     } catch {
       if (!controller.signal.aborted && panel.isConnected && currentVideo()) {
-        status.textContent = "Не удалось загрузить субтитры.";
+        updateStatus("Не удалось загрузить субтитры.", true);
         retry.hidden = false;
       }
     }
@@ -748,7 +836,8 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
     }
     const track = loadedTrack;
     summarize.disabled = true;
-    status.textContent = "Groq готовит пересказ…";
+    summarize.textContent = "Готовим пересказ…";
+    updateStatus("Groq обрабатывает выбранную дорожку.");
     try {
       const answer = await window.summarizeCaptions(transcript(true), assistant);
       if (track !== loadedTrack || !panel.isConnected || !currentVideo()) return;
@@ -758,12 +847,16 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
       for (const part of answer.split(/(\b\d{2,}:\d{2}:\d{2}\b)/)) {
         result.append(times.has(part) ? showTime(times.get(part)) : part);
       }
+      result.hidden = false;
       saveSummary.hidden = false;
-      status.textContent = "";
+      updateStatus();
     } catch (error) {
-      if (track === loadedTrack) status.textContent = error.message || "Не удалось получить пересказ Groq.";
+      if (track === loadedTrack) updateStatus(error.message || "Не удалось получить пересказ Groq.", true);
     } finally {
-      if (track === loadedTrack) summarize.disabled = false;
+      if (track === loadedTrack) {
+        summarize.disabled = false;
+        summarize.textContent = summary ? "Обновить пересказ" : "Пересказать с Groq";
+      }
     }
   };
 

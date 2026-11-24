@@ -5,6 +5,10 @@ import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.media.AudioManager;
@@ -15,7 +19,12 @@ import android.util.Rational;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 import java.io.File;
 import android.Manifest;
@@ -206,34 +215,136 @@ public class WebAppInterface {
 		return !groqPreferences().getString("apiKey", "").isEmpty();
 	}
 
+	private int dp(int size) {
+		return Math.round(size * activity.getResources().getDisplayMetrics().density);
+	}
+
+	private GradientDrawable groqSurface(int color, int radius) {
+		GradientDrawable surface = new GradientDrawable();
+		surface.setColor(color);
+		surface.setCornerRadius(dp(radius));
+		return surface;
+	}
+
+	private TextView groqLabel(LinearLayout column, String value, int size, int color, int gap) {
+		TextView label = new TextView(activity);
+		label.setText(value);
+		label.setTextSize(size);
+		label.setTextColor(color);
+		LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+		params.topMargin = dp(gap);
+		column.addView(label, params);
+		return label;
+	}
+
 	@JavascriptInterface
 	public void openGroqSettings() {
 		activity.runOnUiThread(() -> {
+			boolean dark = (activity.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+					== Configuration.UI_MODE_NIGHT_YES;
+			int surface = dark ? 0xff192322 : 0xfff8fcfb;
+			int field = dark ? 0xff293734 : 0xffe7f0ed;
+			int primary = dark ? 0xffedf6f3 : 0xff132923;
+			int secondary = dark ? 0xffafc5bd : 0xff416158;
+			int accent = dark ? 0xff89e3c9 : 0xff00684f;
+			int onAccent = dark ? 0xff10372d : 0xffffffff;
+			int errorColor = dark ? 0xffffb4ab : 0xffac281f;
+
+			ScrollView scroll = new ScrollView(activity);
+			scroll.setBackground(groqSurface(surface, 24));
+			LinearLayout column = new LinearLayout(activity);
+			column.setOrientation(LinearLayout.VERTICAL);
+			column.setPadding(dp(22), dp(20), dp(22), dp(16));
+			scroll.addView(column);
+
+			groqLabel(column, "Groq · GPT OSS 20B", 13, accent, 0);
+			TextView title = groqLabel(column, "Ключ ИИ-помощника", 23, primary, 6);
+			title.setTypeface(null, Typeface.BOLD);
+			groqLabel(column, "Ключ хранится в приложении и передаётся через relay проекта LINK при запросах к Groq.", 14, secondary, 8);
+
 			EditText input = new EditText(activity);
 			input.setSingleLine(true);
 			input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-			input.setHint(hasGroqKey() ? "Новый ключ Groq" : "API-ключ Groq");
+			input.setTextColor(primary);
+			input.setHintTextColor(secondary);
+			input.setHint(hasGroqKey() ? "Новый API-ключ" : "API-ключ Groq");
+			input.setContentDescription("API-ключ Groq");
+			input.setPadding(dp(14), 0, dp(12), 0);
+			input.setBackground(groqSurface(field, 12));
+			LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(-1, dp(52));
+			inputParams.topMargin = dp(16);
+			column.addView(input, inputParams);
 
-			AlertDialog dialog = new AlertDialog.Builder(activity)
-					.setTitle("Groq · GPT OSS 20B")
-					.setMessage("Ключ передаётся relay-серверу на Render для запросов к Groq. Оставьте поле пустым, чтобы проверить сохранённый ключ.")
-					.setView(input)
-					.setNegativeButton("Закрыть", null)
-					.setNeutralButton("Удалить ключ", (ignored, which) -> groqPreferences().edit().remove("apiKey").apply())
-					.setPositiveButton("Проверить и сохранить", null)
-					.create();
+			Button visibility = new Button(activity, null, android.R.attr.borderlessButtonStyle);
+			visibility.setTextColor(accent);
+			visibility.setAllCaps(false);
+			visibility.setText("Показать ключ");
+			column.addView(visibility, -2, dp(48));
+			visibility.setOnClickListener(button -> {
+				boolean masked = input.getTransformationMethod() instanceof android.text.method.PasswordTransformationMethod;
+				input.setTransformationMethod(masked ? null : android.text.method.PasswordTransformationMethod.getInstance());
+				input.setSelection(input.length());
+				visibility.setText(masked ? "Скрыть ключ" : "Показать ключ");
+			});
+
+			TextView state = groqLabel(column, hasGroqKey() ? "Ключ сохранён. Оставьте поле пустым, чтобы проверить его снова."
+					: "Введите ключ Groq, начинающийся с gsk_.", 14, secondary, 0);
+			state.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+
+			Button verify = new Button(activity);
+			verify.setTextColor(onAccent);
+			verify.setAllCaps(false);
+			verify.setText("Проверить и сохранить");
+			verify.setBackground(groqSurface(accent, 14));
+			LinearLayout.LayoutParams verifyParams = new LinearLayout.LayoutParams(-1, dp(52));
+			verifyParams.topMargin = dp(14);
+			column.addView(verify, verifyParams);
+
+			LinearLayout footer = new LinearLayout(activity);
+			column.addView(footer);
+			Button remove = new Button(activity, null, android.R.attr.borderlessButtonStyle);
+			remove.setTextColor(errorColor);
+			remove.setAllCaps(false);
+			remove.setText("Удалить");
+			remove.setVisibility(hasGroqKey() ? View.VISIBLE : View.GONE);
+			footer.addView(remove, new LinearLayout.LayoutParams(0, dp(48), 1));
+			Button close = new Button(activity, null, android.R.attr.borderlessButtonStyle);
+			close.setTextColor(primary);
+			close.setAllCaps(false);
+			close.setText("Закрыть");
+			footer.addView(close, new LinearLayout.LayoutParams(0, dp(48), 1));
+
+			AlertDialog dialog = new AlertDialog.Builder(activity).setView(scroll).create();
+			close.setOnClickListener(button -> dialog.dismiss());
+			remove.setOnClickListener(button -> {
+				groqPreferences().edit().remove("apiKey").apply();
+				remove.setVisibility(View.GONE);
+				input.setHint("API-ключ Groq");
+				state.setTextColor(secondary);
+				state.setText("Сохранённый ключ удалён");
+				verify.setText("Проверить и сохранить");
+			});
+			column.setFocusableInTouchMode(true);
+			column.requestFocus();
 			dialog.show();
-			dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(hasGroqKey());
-			dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
+			if (dialog.getWindow() != null) {
+				dialog.getWindow().setBackgroundDrawable(new ColorDrawable(android.graphics.Color.TRANSPARENT));
+			}
+			verify.setOnClickListener(button -> {
 				String entered = input.getText().toString().trim();
 				String key = entered.isEmpty() ? groqPreferences().getString("apiKey", "") : entered;
 				if (!key.startsWith("gsk_")) {
-					input.setError("Введите API-ключ Groq, начинающийся с gsk_.");
+					state.setTextColor(errorColor);
+					state.setText("Введите API-ключ Groq, начинающийся с gsk_.");
 					return;
 				}
-				button.setEnabled(false);
+				verify.setEnabled(false);
 				input.setEnabled(false);
-				dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(false);
+				visibility.setEnabled(false);
+				remove.setEnabled(false);
+				verify.setText("Проверяем ключ…");
+				state.setTextColor(secondary);
+				state.setText("Ожидаем ответ Groq");
 				new Thread(() -> {
 					try {
 						JSONArray messages = new JSONArray().put(new JSONObject()
@@ -242,16 +353,27 @@ public class WebAppInterface {
 						activity.runOnUiThread(() -> {
 							if (!dialog.isShowing()) return;
 							groqPreferences().edit().putString("apiKey", key).apply();
-							Toast.makeText(activity, "Ключ Groq проверен и сохранён.", Toast.LENGTH_SHORT).show();
-							dialog.dismiss();
+							input.setText("");
+							input.setHint("Новый API-ключ");
+							input.setEnabled(true);
+							visibility.setEnabled(true);
+							verify.setEnabled(true);
+							remove.setEnabled(true);
+							remove.setVisibility(View.VISIBLE);
+							state.setTextColor(accent);
+							state.setText("Ключ проверен и сохранён");
+							verify.setText("Проверить ключ");
 						});
 					} catch (Exception error) {
 						activity.runOnUiThread(() -> {
 							if (!dialog.isShowing()) return;
-							button.setEnabled(true);
+							verify.setEnabled(true);
+							visibility.setEnabled(true);
 							input.setEnabled(true);
-							input.setError(groqError(error));
-							dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(hasGroqKey());
+							state.setTextColor(errorColor);
+							state.setText(groqError(error));
+							verify.setText("Повторить проверку");
+							remove.setEnabled(hasGroqKey());
 						});
 					}
 				}).start();
