@@ -6,19 +6,21 @@ Last Updated On: 19 Sep , 2026 , 07:11 IST
 
 
 
-window.ytproSabrDownload= async function() {
+window.ytproSabrDownload = async function(assistant = false) {
 
 
-var ytproDownDiv=getDownloadElement();
+var ytproDownDiv = getDownloadElement(assistant);
 
-ytproDownDiv.querySelector("#videoViewDiv").innerHTML="Loading...";
+const captionView = ytproDownDiv.querySelector("#captionsViewDiv");
+if (assistant) captionView.textContent = "Поиск автоматических субтитров…";
+else ytproDownDiv.querySelector("#videoViewDiv").textContent = "Loading...";
 
 
 //Get Video ID
 var videoId ="";
 
 if(window.location.pathname.indexOf("shorts") > -1){
-videoId=window.location.pathname.substr(8,window.location.pathname.length);
+videoId=window.location.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
 }
 else{
 videoId=new URLSearchParams(window.location.search).get("v");
@@ -34,17 +36,6 @@ if (!videoId) { window.Android?.showToast?.('No video ID found in URL.'); return
 const { Innertube, Platform, Constants,IRawResponse } = await import(
 'https://cdn.jsdelivr.net/npm/youtubei.js@18.0.0/bundle/browser.min.js'
 );
-const { SabrStream } = await import('https://esm.sh/googlevideo@4.1.1/sabr-stream');
-const { buildSabrFormat , EnabledTrackTypes } = await import('https://esm.sh/googlevideo@4.1.1/utils');
-
-const { BotGuardClient, getChallenge } = await import('https://esm.sh/bgutils-js@4.0.3/botguard');
-const { WebPoSignalOutput } = await import('https://esm.sh/bgutils-js@4.0.3/shared-types');
-const { buildURL, getHeaders, USER_AGENT, parseLooseJSON } = await import('https://esm.sh/bgutils-js@4.0.3/utils');
-const { WebPoMinter } = await import('https://esm.sh/bgutils-js@4.0.3/webpo');
-
-
-
-
 async function fetchFunction(input, init = {}) {
 
 
@@ -113,6 +104,18 @@ fetch: fetchFunction});
 
 
   
+
+let SabrStream, buildSabrFormat, EnabledTrackTypes;
+let BotGuardClient, getChallenge, WebPoSignalOutput, buildURL, getHeaders, USER_AGENT, parseLooseJSON, WebPoMinter;
+async function loadDownloadTools() {
+  ({ SabrStream } = await import("https://esm.sh/googlevideo@4.1.1/sabr-stream"));
+  ({ buildSabrFormat, EnabledTrackTypes } = await import("https://esm.sh/googlevideo@4.1.1/utils"));
+  ({ BotGuardClient, getChallenge } = await import("https://esm.sh/bgutils-js@4.0.3/botguard"));
+  ({ WebPoSignalOutput } = await import("https://esm.sh/bgutils-js@4.0.3/shared-types"));
+  ({ buildURL, getHeaders, USER_AGENT, parseLooseJSON } = await import("https://esm.sh/bgutils-js@4.0.3/utils"));
+  ({ WebPoMinter } = await import("https://esm.sh/bgutils-js@4.0.3/webpo"));
+  return generateFullPoToken();
+}
 
 // PoToken Generator 
 let placeholderPoToken = null;
@@ -185,25 +188,24 @@ return null;
 }
 }
 
-const fullTokenPromise =await generateFullPoToken();
-
-const info = await yt.getBasicInfo(videoId, { client: 'WEB' });
-
- 
-const player = yt.session.player;
-const streamingData = info.streaming_data;
-  
+const info = await yt.getBasicInfo(videoId, { client: "WEB" });
+if (!ytproDownDiv.isConnected) return;
 
 const title = info.basic_info.title || videoId;
-addCaptionTranscript(ytproDownDiv.querySelector("#captionsViewDiv"),
-  info.captions?.caption_tracks ?? [], videoId, title);
+const safeTitle = title.replace(/[\/\\?%*:|"<>]/g, "-");
+const captions = info.captions?.caption_tracks ?? [];
+captionView.replaceChildren();
+addCaptionTranscript(captionView, captions, videoId, title, assistant);
+updateCaptions(captionView, captions, safeTitle);
+if (assistant) return;
 
-if (!streamingData || !player) { 
-window.Android?.showToast?.('No streaming data or player found.'); 
-return; 
+const player = yt.session.player;
+const streamingData = info.streaming_data;
+if (!streamingData || !player) {
+  window.Android?.showToast?.("No streaming data or player found.");
+  return;
 }
-
-const safeTitle = title.replace(/[\/\\?%*:|"<>]/g, '-');
+const fullTokenPromise = await loadDownloadTools();
 
 // Fallback size formatter just in case window.formatFileSize isn't ready
 const formatBytes = (bytes) => {
@@ -589,7 +591,7 @@ function readCaptionCues(events) {
   }).sort((a, b) => a.milliseconds - b.milliseconds);
 }
 
-function addCaptionTranscript(view, captions, videoId, title) {
+function addCaptionTranscript(view, captions, videoId, title, assistant) {
   const tracks = captions.filter(track => {
     if (!track.base_url) return false;
     return track.kind === "asr" || track.vss_id?.startsWith("a.") ||
@@ -629,7 +631,7 @@ function addCaptionTranscript(view, captions, videoId, title) {
   const save = document.createElement("button");
   save.textContent = "Сохранить текст";
   const summarize = document.createElement("button");
-  summarize.textContent = "Пересказать с Gemini";
+  summarize.textContent = "Пересказать с Groq";
   const saveSummary = document.createElement("button");
   saveSummary.textContent = "Сохранить пересказ";
   saveSummary.hidden = true;
@@ -651,6 +653,7 @@ function addCaptionTranscript(view, captions, videoId, title) {
   let summary = "";
   let request;
   let loadedTrack = null;
+  let autoSummarize = assistant;
   const currentVideo = () => (new URLSearchParams(location.search).get("v") ||
     location.pathname.match(/^\/shorts\/([^/]+)/)?.[1]) === videoId;
   const showTime = milliseconds => {
@@ -722,6 +725,10 @@ function addCaptionTranscript(view, captions, videoId, title) {
       status.textContent = "";
       search.disabled = save.disabled = summarize.disabled = false;
       renderRows();
+      if (autoSummarize) {
+        autoSummarize = false;
+        summarize.click();
+      }
     } catch {
       if (!controller.signal.aborted && panel.isConnected && currentVideo()) {
         status.textContent = "Не удалось загрузить субтитры.";
@@ -735,11 +742,15 @@ function addCaptionTranscript(view, captions, videoId, title) {
   save.onclick = () => exportText("расшифровка", transcript(timestamps.checked));
   saveSummary.onclick = () => exportText("пересказ", summary);
   summarize.onclick = async () => {
+    if (!Android.hasGroqKey()) {
+      Android.openGroqSettings();
+      return;
+    }
     const track = loadedTrack;
     summarize.disabled = true;
-    status.textContent = "Gemini готовит пересказ…";
+    status.textContent = "Groq готовит пересказ…";
     try {
-      const answer = await window.summarizeCaptions(transcript(true));
+      const answer = await window.summarizeCaptions(transcript(true), assistant);
       if (track !== loadedTrack || !panel.isConnected || !currentVideo()) return;
       summary = answer;
       const times = new Map(cues.map(cue => [captionTimestamp(cue.milliseconds), cue.milliseconds]));
@@ -750,7 +761,7 @@ function addCaptionTranscript(view, captions, videoId, title) {
       saveSummary.hidden = false;
       status.textContent = "";
     } catch (error) {
-      if (track === loadedTrack) status.textContent = error.message || "Не удалось получить пересказ Gemini.";
+      if (track === loadedTrack) status.textContent = error.message || "Не удалось получить пересказ Groq.";
     } finally {
       if (track === loadedTrack) summarize.disabled = false;
     }
@@ -762,47 +773,29 @@ function addCaptionTranscript(view, captions, videoId, title) {
   else tab.addEventListener("click", loadTrack, { once: true });
 }
 
-function updateCaptions(){
-var div=ytproDownDiv.querySelector("#captionsViewDiv");
-const formats = document.createElement("div");
-div.append(formats);
-formats.innerHTML=`<style>cp{width:100%;height:auto;padding-bottom:8px;}c{height:45px;width:50px;padding-top:5px;background:${d};border-radius:10px;margin-left:10px;display:block}</style>`;
-
-var captions=info?.captions?.caption_tracks ?? [];
-
-var t=`Captions ${safeTitle} YTPRO`;
-
-captions.forEach(cap=>{
-
-cap.baseUrl = cap.base_url.replace("&fmt=srv3","");
-
-formats.innerHTML+=`
-<span style="width:100px;text-align:left">${cap?.name?.text}</span> 
-<br><br>
-<div style="position:absolute;right:10px;display:flex">
-<c data-url="${cap.baseUrl}&fmt=sbv" data-title="${t}" data-ext=".txt" >${downBtn} <br>.txt</c>
-<c  data-url="${cap.baseUrl}&fmt=srt" data-title="${t}" data-ext=".srt" >${downBtn} <br>.srt</c>
-<c  data-url="${cap.baseUrl}" data-title="${t}" data-ext=".xml"  >${downBtn} <br>.xml</c>
-<c  data-url="${cap.baseUrl}&fmt=vtt" data-title="${t}" data-ext=".vtt" >${downBtn} <br>.vtt</c>
-<c data-url="${cap.baseUrl}&fmt=srv1" data-title="${t}.srv1" >${downBtn} <br>.srv1</c><c  data-url="${cap.baseUrl}&fmt=ttml" data-title="${t}" data-ext=".ttml" >${downBtn} <br>.ttml</c></div>
-<br>
-<br><br>
-<br><br>`;
-});
-
-
-
-formats.addEventListener("click",(e)=>{
-var el=e.target.closest("[data-url]");
-if(!el) return;
-
-Android.downvid(el.dataset.title+el.dataset.ext,el.dataset.url,"plain/text");
-
-});
-
+function updateCaptions(view, captions, safeTitle) {
+  const formats = document.createElement("div");
+  for (const track of captions) {
+    if (!track.base_url) continue;
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0";
+    const label = document.createElement("span");
+    label.textContent = track.name?.text || track.language_code || "Субтитры";
+    const buttons = document.createElement("div");
+    for (const [extension, format] of [["txt", "sbv"], ["srt", "srt"], ["xml", "srv3"]]) {
+      const url = new URL(track.base_url, location.href);
+      url.searchParams.set("fmt", format);
+      const button = document.createElement("button");
+      button.textContent = "." + extension;
+      button.onclick = () => Android.downvid("Captions " + safeTitle + "." + extension,
+        url.href, extension === "xml" ? "application/xml" : "text/plain");
+      buttons.append(button);
+    }
+    row.append(label, buttons);
+    formats.append(row);
+  }
+  view.append(formats);
 }
-
-
 
 /*EVENT LISTENERS**/
 muxedDiv.addEventListener("click",(e)=>{
@@ -843,7 +836,6 @@ updateAudioOnlyFormats();
 updateVideoOnlyFormats(); 
 }
 updateThumbnails();
-updateCaptions();
 
 
 
@@ -1089,7 +1081,7 @@ window.Android?.muxVideoAudio?.(videoFileName,audioFileName,`${safeTitle}_${new 
 
 
 
-function getDownloadElement() {
+function getDownloadElement(assistant) {
 const isExisting = (id) => document.getElementById(id);
 
 // Reuse or create outer + inner divs
@@ -1117,7 +1109,7 @@ if (!ytproDownDiv.contains(ev.target)) history.back();
 });
 
 // Build tabs declaratively
-const TABS = [
+const TABS = assistant ? [{ label: "ИИ-помощник", viewId: "captionsViewDiv" }] : [
 { label: "Formats",    viewId: "videoViewDiv"    },
 { label: "Thumbnails", viewId: "thumbViewDiv"    },
 { label: "Captions",   viewId: "captionsViewDiv" },
@@ -1125,7 +1117,7 @@ const TABS = [
 
 const tabStyle = {
 height: "100%",
-width: "calc((100% - 10px) / 3)",
+flex: "1",
 borderRadius: "25px",
 lineHeight: "30px"
 };
@@ -1169,7 +1161,7 @@ ytproDown.appendChild(ytproDownDiv);
 ytproDownDiv.prepend(tabs); // tabs sit above views
 
 tabs.children[0].style.background=d;
-document.querySelector("#videoViewDiv").style.display = "block"
+views[0].style.display = "block";
 
 return ytproDownDiv;
 }

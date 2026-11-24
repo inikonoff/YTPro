@@ -1,17 +1,21 @@
 package com.google.android.youtube.pro.webview;
 
+import android.app.AlertDialog;
 import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.provider.Settings;
+import android.text.InputType;
 import android.util.Rational;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.widget.EditText;
 import android.widget.Toast;
 import java.io.File;
 import android.Manifest;
@@ -21,12 +25,13 @@ import android.os.Environment;
 import androidx.webkit.WebViewFeature;
 
 import com.google.android.youtube.pro.ForegroundService;
-import com.google.android.youtube.pro.GeminiWrapper;
+import com.google.android.youtube.pro.GroqRelay;
 import com.google.android.youtube.pro.MainActivity;
 import com.google.android.youtube.pro.R;
 import com.google.android.youtube.pro.utils.DownloadUtils;
 import com.google.android.youtube.pro.utils.MediaMuxerUtils;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class WebAppInterface {
@@ -192,22 +197,91 @@ public class WebAppInterface {
 		.putExtra("currentPosition", ct).putExtra("action", action));
 	}
 	
+	private SharedPreferences groqPreferences() {
+		return activity.getSharedPreferences("groq", Context.MODE_PRIVATE);
+	}
+
 	@JavascriptInterface
-	public void getSNlM0e(String cookies) {
+	public boolean hasGroqKey() {
+		return !groqPreferences().getString("apiKey", "").isEmpty();
+	}
+
+	@JavascriptInterface
+	public void openGroqSettings() {
+		activity.runOnUiThread(() -> {
+			EditText input = new EditText(activity);
+			input.setSingleLine(true);
+			input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+			input.setHint(hasGroqKey() ? "Новый ключ Groq" : "API-ключ Groq");
+
+			AlertDialog dialog = new AlertDialog.Builder(activity)
+					.setTitle("Groq · GPT OSS 20B")
+					.setMessage("Ключ передаётся relay-серверу на Render для запросов к Groq. Оставьте поле пустым, чтобы проверить сохранённый ключ.")
+					.setView(input)
+					.setNegativeButton("Закрыть", null)
+					.setNeutralButton("Удалить ключ", (ignored, which) -> groqPreferences().edit().remove("apiKey").apply())
+					.setPositiveButton("Проверить и сохранить", null)
+					.create();
+			dialog.show();
+			dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(hasGroqKey());
+			dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
+				String entered = input.getText().toString().trim();
+				String key = entered.isEmpty() ? groqPreferences().getString("apiKey", "") : entered;
+				if (!key.startsWith("gsk_")) {
+					input.setError("Введите API-ключ Groq, начинающийся с gsk_.");
+					return;
+				}
+				button.setEnabled(false);
+				input.setEnabled(false);
+				dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(false);
+				new Thread(() -> {
+					try {
+						JSONArray messages = new JSONArray().put(new JSONObject()
+								.put("role", "user").put("content", "Reply with OK."));
+						GroqRelay.chat(key, messages, 256);
+						activity.runOnUiThread(() -> {
+							if (!dialog.isShowing()) return;
+							groqPreferences().edit().putString("apiKey", key).apply();
+							Toast.makeText(activity, "Ключ Groq проверен и сохранён.", Toast.LENGTH_SHORT).show();
+							dialog.dismiss();
+						});
+					} catch (Exception error) {
+						activity.runOnUiThread(() -> {
+							if (!dialog.isShowing()) return;
+							button.setEnabled(true);
+							input.setEnabled(true);
+							input.setError(groqError(error));
+							dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(hasGroqKey());
+						});
+					}
+				}).start();
+			});
+		});
+	}
+
+	private String groqError(Exception error) {
+		if (error instanceof java.net.SocketTimeoutException) return "Relay долго не отвечает. Попробуйте ещё раз.";
+		return error.getMessage() == null ? "Не удалось выполнить запрос Groq." : error.getMessage();
+	}
+
+	@JavascriptInterface
+	public void requestGroq(int requestId, String messages, int maxTokens) {
 		new Thread(() -> {
-			String response = GeminiWrapper.getSNlM0e(cookies);
-			activity.runOnUiThread(() -> web.evaluateJavascript("callbackSNlM0e.resolve(`" + response + "`)", null));
+			String content = "";
+			String error = "";
+			try {
+				String key = groqPreferences().getString("apiKey", "");
+				if (key.isEmpty()) throw new IllegalStateException("Добавьте API-ключ Groq в настройках YTPro.");
+				content = GroqRelay.chat(key, new JSONArray(messages), Math.min(4096, Math.max(256, maxTokens)));
+			} catch (Exception failure) {
+				error = groqError(failure);
+			}
+			String callback = "window.ytproGroqResult?.(" + requestId + ","
+					+ JSONObject.quote(content) + "," + JSONObject.quote(error) + ")";
+			activity.runOnUiThread(() -> web.evaluateJavascript(callback, null));
 		}).start();
 	}
-	
-	@JavascriptInterface
-	public void GeminiClient(String url, String headers, String body) {
-		new Thread(() -> {
-			JSONObject response = GeminiWrapper.getStream(url, headers, body);
-			activity.runOnUiThread(() -> web.evaluateJavascript("callbackGeminiClient.resolve(" + response + ")", null));
-		}).start();
-	}
-	
+
 	@JavascriptInterface
 	public String getAllCookies(String url) {
 		return CookieManager.getInstance().getCookie(url);
