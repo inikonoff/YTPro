@@ -14,6 +14,7 @@ import org.json.JSONObject;
 
 public final class GroqRelay {
     private static final String ENDPOINT = "https://voicebot-iwdm.onrender.com/api/link/chat";
+    private static final String LINK_ORIGIN = "https://ilsoft-dev.github.io";
     public static final String MODEL = "openai/gpt-oss-20b";
 
     private GroqRelay() {}
@@ -32,6 +33,9 @@ public final class GroqRelay {
             connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            // The LINK relay checks the origin before forwarding requests to Groq.
+            connection.setRequestProperty("Origin", LINK_ORIGIN);
+            connection.setRequestProperty("Referer", LINK_ORIGIN + "/LINK/");
             connection.setDoOutput(true);
 
             byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
@@ -41,7 +45,9 @@ public final class GroqRelay {
             }
 
             int status = connection.getResponseCode();
-            if (status == 401 || status == 403) throw new IOException("Groq отклонил API-ключ или доступ к модели.");
+            if (status == 401 || status == 403) {
+                throw new IOException("Relay отклонил запрос (HTTP " + status + "). Проверка API-ключа не выполнена.");
+            }
             if (status == 429) throw new IOException("Превышен лимит запросов Groq. Попробуйте позже.");
             if (status < 200 || status >= 300) throw new IOException("Ошибка relay (HTTP " + status + ").");
 
