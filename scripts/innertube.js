@@ -188,12 +188,22 @@ return null;
 }
 }
 
-const info = await yt.getBasicInfo(videoId, { client: "WEB" });
+const playerResponses = [
+  document.getElementById("movie_player")?.getPlayerResponse?.(),
+  document.getElementById("player")?.getPlayerResponse?.(),
+  window.ytInitialPlayerResponse
+].filter(response => response?.videoDetails?.videoId === videoId);
+let info;
+try {
+  info = await yt.getBasicInfo(videoId, { client: "WEB" });
+} catch (error) {
+  if (!assistant) throw error;
+}
 if (!ytproDownDiv.isConnected) return;
 
-const title = info.basic_info.title || videoId;
+const title = info?.basic_info?.title || playerResponses[0]?.videoDetails.title || videoId;
 const safeTitle = title.replace(/[\/\\?%*:|"<>]/g, "-");
-const captions = info.captions?.caption_tracks ?? [];
+const captions = collectCaptionTracks(playerResponses, info?.captions?.caption_tracks ?? []);
 captionView.replaceChildren();
 addCaptionTranscript(captionView, captions, videoId, title, assistant);
 updateCaptions(captionView, captions, safeTitle);
@@ -343,7 +353,7 @@ categories: {
 
 
 ytproDownDiv.insertAdjacentHTML('beforeend',`<style>#downytprodiv a{text-decoration:none;} #downytprodiv li{list-style:none; display:flex;align-items:center;justify-content:center;border-radius:25px;padding:8px;background:${d};margin:5px;margin-top:8px}
-#downytprodiv select {
+#videoViewDiv select {
 min-height: 20px;
 width: auto;
 border-radius: 25px;
@@ -591,34 +601,47 @@ function readCaptionCues(events) {
   }).sort((a, b) => a.milliseconds - b.milliseconds);
 }
 
-function addCaptionTranscript(view, captions, videoId, title, assistant) {
-  const tracks = captions.filter(track => {
-    if (!track.base_url) return false;
-    return track.kind === "asr" || track.vss_id?.startsWith("a.") ||
-      new URL(track.base_url, location.href).searchParams.get("kind") === "asr";
-  });
+function collectCaptionTracks(responses, fallback) {
+  const fromPlayer = responses.flatMap(response =>
+    response.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? []);
+  const tracks = new Map();
+  for (const source of [...fromPlayer, ...fallback]) {
+    const base_url = source.baseUrl || source.base_url;
+    if (!base_url) continue;
+    const params = new URL(base_url, location.href).searchParams;
+    const language_code = source.languageCode || source.language_code || params.get("lang");
+    const vssId = source.vssId || source.vss_id;
+    const automatic = source.kind === "asr" || vssId?.startsWith("a.") || params.get("kind") === "asr";
+    const name = source.name?.simpleText || source.name?.runs?.map(run => run.text).join("") ||
+      source.name?.text || language_code;
+    const id = vssId || [language_code, automatic, name].join(":");
+    if (!tracks.has(id)) tracks.set(id, { base_url, language_code, name: { text: name }, automatic, urls: [] });
+    const urls = tracks.get(id).urls;
+    if (!urls.includes(base_url)) urls.push(base_url);
+  }
+  return [...tracks.values()];
+}
+
+function addCaptionTranscript(view, tracks, videoId, title, assistant) {
   const panel = document.createElement("section");
   view.prepend(panel);
   panel.className = "ytpro-caption-card";
-  if (isD) panel.classList.add("ytpro-caption-dark");
+  panel.style.colorScheme = Android.isSystemDark?.() ? "dark" : "light";
   const style = document.createElement("style");
   style.textContent = `
     .ytpro-caption-card {
-      --surface: #f8fcfb; --field: #e8f1ee; --ink: #132923; --muted: #416158;
-      --accent: #00684f; --on-accent: #fff; --line: #cbded7; --error: #ac281f;
-      display: grid; gap: 12px; background: var(--surface); color: var(--ink);
-      padding: 16px; margin-bottom: 16px; border: 1px solid var(--line);
-      border-radius: 20px; text-align: left; font-size: 14px; line-height: 1.45;
-    }
-    .ytpro-caption-card.ytpro-caption-dark {
-      --surface: #192322; --field: #293734; --ink: #edf6f3; --muted: #afc5bd;
-      --accent: #89e3c9; --on-accent: #10372d; --line: #40554e; --error: #ffb4ab;
+      --surface: Canvas; --field: ButtonFace; --ink: CanvasText; --muted: GrayText;
+      --accent: Highlight; --on-accent: HighlightText; --line: ButtonBorder;
+      --error: light-dark(#a52a23, #ffb4ab);
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; background: var(--surface); color: var(--ink);
+      padding: 10px; margin-bottom: 10px; border: 1px solid var(--line);
+      border-radius: 14px; text-align: left; font: 13px/1.4 system-ui;
     }
     .ytpro-caption-card [hidden] { display: none !important; }
-    .ytpro-caption-card h3 { margin: 0; font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+    .ytpro-caption-card .ytpro-caption-title { display: block; font: 600 14px/1.4 system-ui; overflow-wrap: anywhere; }
     .ytpro-caption-card .ytpro-caption-meta { margin: 0 0 4px; font-weight: 600; color: var(--accent); }
     .ytpro-caption-card button, .ytpro-caption-card select, .ytpro-caption-card input[type="search"] {
-      box-sizing: border-box; min-height: 44px; padding: 8px 11px; border: 1px solid var(--line);
+      box-sizing: border-box; min-width: 0; max-width: 100%; min-height: 40px; padding: 5px 8px; border: 1px solid var(--line);
       border-radius: 10px; color: var(--ink); background: var(--field); font: inherit;
     }
     .ytpro-caption-card :is(button, select, input, summary):focus-visible {
@@ -643,38 +666,40 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
       padding-block: 4px; border-bottom: 1px solid var(--line);
     }
     .ytpro-caption-card .ytpro-caption-time {
-      padding: 4px 7px; min-height: 36px; color: var(--accent); font-variant-numeric: tabular-nums;
+      padding: 2px 5px; min-height: 32px; color: var(--accent); font-variant-numeric: tabular-nums;
     }
     .ytpro-caption-card .ytpro-caption-result {
-      background: var(--field); padding: 14px; border-radius: 12px; white-space: pre-wrap;
-      overflow-wrap: anywhere; font-size: 15px; line-height: 1.6;
+      background: var(--field); padding: 10px; border-radius: 12px; white-space: pre-wrap;
+      overflow-wrap: anywhere; font-size: 13px; line-height: 1.45;
     }
   `;
   panel.append(style);
-  const heading = document.createElement("header");
+  const heading = document.createElement("div");
   const meta = document.createElement("p");
   meta.className = "ytpro-caption-meta";
-  meta.textContent = assistant ? "Groq · GPT OSS 20B" : "Автоматические субтитры";
-  const headingTitle = document.createElement("h3");
+  meta.textContent = assistant ? "Groq · GPT OSS 20B" : "Субтитры";
+  const headingTitle = document.createElement("div");
+  headingTitle.className = "ytpro-caption-title";
   headingTitle.textContent = title;
   heading.append(meta, headingTitle);
   panel.append(heading);
 
   if (!tracks.length) {
-    panel.append("Автоматические субтитры недоступны.");
+    panel.append("Плеер не предоставил доступных дорожек субтитров.");
     return;
   }
 
   const select = document.createElement("select");
-  select.setAttribute("aria-label", "Язык автоматических субтитров");
+  select.setAttribute("aria-label", "Дорожка субтитров");
   for (const [index, track] of tracks.entries()) {
     select.add(new Option(track.name?.text || track.language_code || "Дорожка " + (index + 1), index));
   }
   const russian = tracks.findIndex(track => {
     const language = track.language_code || new URL(track.base_url, location.href).searchParams.get("lang");
-    return /^ru(?:-|$)/i.test(language ?? "");
+    return track.automatic && /^ru(?:-|$)/i.test(language ?? "");
   });
-  select.selectedIndex = Math.max(0, russian);
+  const automated = tracks.findIndex(track => track.automatic);
+  select.selectedIndex = russian >= 0 ? russian : Math.max(0, automated);
 
   const search = document.createElement("input");
   search.type = "search";
@@ -768,7 +793,7 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
   }
 
   function fileHeader() {
-    return [title, videoUrl, "Автоматические субтитры · " + select.selectedOptions[0].text].join("\n");
+    return [title, videoUrl, "Субтитры · " + select.selectedOptions[0].text].join("\n");
   }
 
   function exportText(suffix, text) {
@@ -797,12 +822,23 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
     saveSummary.hidden = true;
     search.disabled = save.disabled = summarize.disabled = true;
 
-    const url = new URL(tracks[select.selectedIndex].base_url, location.href);
-    url.searchParams.set("fmt", "json3");
     try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const loadedCues = readCaptionCues((await response.json()).events);
+      let loadedCues = [];
+      let receivedTrack = false;
+      for (const candidate of tracks[select.selectedIndex].urls) {
+        const url = new URL(candidate, location.href);
+        url.searchParams.set("fmt", "json3");
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          if (!response.ok) continue;
+          loadedCues = readCaptionCues((await response.json()).events);
+          receivedTrack = true;
+          if (loadedCues.length) break;
+        } catch {
+          if (controller.signal.aborted) return;
+        }
+      }
+      if (!receivedTrack) throw new Error("Caption request failed");
       if (controller.signal.aborted || !panel.isConnected || !currentVideo()) return;
       if (!loadedCues.length) {
         updateStatus("Дорожка не содержит текста.", true);
@@ -844,8 +880,9 @@ function addCaptionTranscript(view, captions, videoId, title, assistant) {
       summary = answer;
       const times = new Map(cues.map(cue => [captionTimestamp(cue.milliseconds), cue.milliseconds]));
       result.replaceChildren();
-      for (const part of answer.split(/(\b\d{2,}:\d{2}:\d{2}\b)/)) {
-        result.append(times.has(part) ? showTime(times.get(part)) : part);
+      for (const part of answer.split(/(\[\d{2,}:\d{2}:\d{2}\]|\b\d{2,}:\d{2}:\d{2}\b)/)) {
+        const time = part.replace(/^\[|\]$/g, "");
+        result.append(times.has(time) ? showTime(times.get(time)) : part);
       }
       result.hidden = false;
       saveSummary.hidden = false;
@@ -1178,27 +1215,31 @@ function getDownloadElement(assistant) {
 const isExisting = (id) => document.getElementById(id);
 
 // Reuse or create outer + inner divs
-const ytproDown = isExisting("outerdownytprodiv") || document.createElement("div");
+const ytproDown = isExisting("outerdownytprodiv") || document.createElement("dialog");
 const ytproDownDiv = isExisting("downytprodiv") || document.createElement("div");
 
 ytproDown.id = "outerdownytprodiv";
 ytproDownDiv.id = "downytprodiv";
 
+const scheme = Android.isSystemDark?.() ? "dark" : "light";
 Object.assign(ytproDown.style, {
-height: "100%", width: "100%", position: "fixed",
-top: "0", left: "0", display: "flex",
-justifyContent: "center", background: "rgba(0,0,0,0.4)", zIndex: "9"
+  position: "fixed", inset: "auto 0 0", margin: "0 auto",
+  width: "min(100%, 580px)", maxWidth: "none", maxHeight: "72dvh",
+  boxSizing: "border-box", padding: "0", border: "0", overflow: "hidden",
+  borderRadius: "18px 18px 0 0", background: "Canvas", color: "CanvasText",
+  colorScheme: scheme, boxShadow: "0 0 0 100vmax #0006"
 });
-
 Object.assign(ytproDownDiv.style, {
-height: "65%", width: "85%", overflow: "auto",
-background: isD ? "#212121" : "#f1f1f1",
-position: "absolute", bottom: "20px", zIndex: "99",
-padding: "20px", borderRadius: "25px", textAlign: "center"
+  display: "flex", flexDirection: "column", maxHeight: "72dvh",
+  boxSizing: "border-box", minWidth: "0", padding: "10px 12px",
+  textAlign: "center", font: "13px/1.4 system-ui", webkitTextSizeAdjust: "100%"
 });
-
-ytproDown.addEventListener("click", (ev) => {
-if (!ytproDownDiv.contains(ev.target)) history.back();
+ytproDown.addEventListener("click", event => {
+  if (event.target === ytproDown) history.back();
+});
+ytproDown.addEventListener("cancel", event => {
+  event.preventDefault();
+  history.back();
 });
 
 // Build tabs declaratively
@@ -1209,22 +1250,30 @@ const TABS = assistant ? [{ label: "ИИ-помощник", viewId: "captionsVie
 ];
 
 const tabStyle = {
-height: "100%",
-flex: "1",
-borderRadius: "25px",
-lineHeight: "30px"
+  flex: "1", minWidth: "0", borderRadius: "9px", minHeight: "36px",
+  border: "0", padding: "5px", font: "inherit", color: "CanvasText",
+  background: "transparent"
 };
-
+const toolbar = document.createElement("div");
+Object.assign(toolbar.style, { flex: "none", display: "flex", gap: "6px", marginBottom: "8px" });
 const tabs = document.createElement("div");
-Object.assign(tabs.style, {
-height: "30px", width: "95%", display: "flex",
-gap: "5px", position: "absolute", top: "10px", left: "2.5%"
+Object.assign(tabs.style, { flex: "1", minWidth: "0", display: "flex", gap: "4px" });
+const close = document.createElement("button");
+close.type = "button";
+close.textContent = "×";
+close.setAttribute("aria-label", "Закрыть панель");
+Object.assign(close.style, {
+  width: "36px", border: "0", borderRadius: "9px",
+  background: "ButtonFace", color: "ButtonText", font: "20px system-ui"
 });
+close.onclick = () => history.back();
+toolbar.append(tabs, close);
 
 const views = [];
 
 TABS.forEach(({ label, viewId }) => {
-const tab = document.createElement("div");
+const tab = document.createElement("button");
+tab.type = "button";
 Object.assign(tab.style, tabStyle);
 tab.textContent = label;
 tab.dataset.view = `#${viewId}`;
@@ -1232,7 +1281,7 @@ tabs.appendChild(tab);
 
 const view = document.createElement("div");
 view.id = viewId;
-view.style.paddingTop="40px";
+Object.assign(view.style, { overflow: "auto", minHeight: "0", overscrollBehavior: "contain" });
 view.style.display = "none";
 ytproDownDiv.appendChild(view);
 views.push(view);
@@ -1246,15 +1295,16 @@ if (!el) return;
 views.forEach(v => v.style.display = "none");
 
 document.querySelector(el.dataset.view).style.display = "block";
-el.style.background = d;
+el.style.background = "ButtonFace";
 });
 
 document.body.appendChild(ytproDown);
 ytproDown.appendChild(ytproDownDiv);
-ytproDownDiv.prepend(tabs); // tabs sit above views
+ytproDownDiv.prepend(toolbar);
 
-tabs.children[0].style.background=d;
+tabs.children[0].style.background = "ButtonFace";
 views[0].style.display = "block";
+if (!ytproDown.open) ytproDown.showModal();
 
 return ytproDownDiv;
 }

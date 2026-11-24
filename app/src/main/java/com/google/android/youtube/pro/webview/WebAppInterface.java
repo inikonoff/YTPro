@@ -238,32 +238,46 @@ public class WebAppInterface {
 	}
 
 	@JavascriptInterface
+	public boolean isSystemDark() {
+		return (activity.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+				== Configuration.UI_MODE_NIGHT_YES;
+	}
+
+	@JavascriptInterface
 	public void openGroqSettings() {
 		activity.runOnUiThread(() -> {
-			boolean dark = (activity.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
-					== Configuration.UI_MODE_NIGHT_YES;
-			int surface = dark ? 0xff192322 : 0xfff8fcfb;
-			int field = dark ? 0xff293734 : 0xffe7f0ed;
-			int primary = dark ? 0xffedf6f3 : 0xff132923;
-			int secondary = dark ? 0xffafc5bd : 0xff416158;
-			int accent = dark ? 0xff89e3c9 : 0xff00684f;
-			int onAccent = dark ? 0xff10372d : 0xffffffff;
+			boolean dark = isSystemDark();
+			int theme = dark ? android.R.style.Theme_DeviceDefault : android.R.style.Theme_DeviceDefault_Light;
+			android.view.ContextThemeWrapper themed = new android.view.ContextThemeWrapper(activity, theme);
+			android.content.res.TypedArray palette = themed.obtainStyledAttributes(new int[] {
+					android.R.attr.colorBackground, android.R.attr.textColorPrimary,
+					android.R.attr.textColorSecondary, android.R.attr.colorAccent
+			});
+			int surface = palette.getColor(0, dark ? 0xff202124 : 0xfffafafa);
+			int primary = palette.getColor(1, dark ? 0xffeeeeee : 0xff171717);
+			int secondary = palette.getColor(2, dark ? 0xffbdbdbd : 0xff555555);
+			int accent = palette.getColor(3, dark ? 0xffaecbfa : 0xff1558ae);
+			palette.recycle();
+			int onAccent = androidx.core.graphics.ColorUtils.calculateContrast(accent | 0xff000000, 0xff000000) >= 4.5
+					? 0xff000000 : 0xffffffff;
+			int field = androidx.core.graphics.ColorUtils.blendARGB(surface, primary, 0.08f);
 			int errorColor = dark ? 0xffffb4ab : 0xffac281f;
 
 			ScrollView scroll = new ScrollView(activity);
 			scroll.setBackground(groqSurface(surface, 24));
 			LinearLayout column = new LinearLayout(activity);
 			column.setOrientation(LinearLayout.VERTICAL);
-			column.setPadding(dp(22), dp(20), dp(22), dp(16));
+			column.setPadding(dp(16), dp(14), dp(16), dp(12));
 			scroll.addView(column);
 
 			groqLabel(column, "Groq · GPT OSS 20B", 13, accent, 0);
-			TextView title = groqLabel(column, "Ключ ИИ-помощника", 23, primary, 6);
+			TextView title = groqLabel(column, "Ключ ИИ-помощника", 19, primary, 6);
 			title.setTypeface(null, Typeface.BOLD);
-			groqLabel(column, "Ключ хранится в приложении и передаётся через relay проекта LINK при запросах к Groq.", 14, secondary, 8);
+			groqLabel(column, "Ключ хранится в приложении и передаётся через relay проекта LINK при запросах к Groq.", 13, secondary, 8);
 
 			EditText input = new EditText(activity);
 			input.setSingleLine(true);
+			input.setTextSize(14);
 			input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
 			input.setTextColor(primary);
 			input.setHintTextColor(secondary);
@@ -354,6 +368,8 @@ public class WebAppInterface {
 							if (!dialog.isShowing()) return;
 							groqPreferences().edit().putString("apiKey", key).apply();
 							input.setText("");
+							input.setTransformationMethod(android.text.method.PasswordTransformationMethod.getInstance());
+							visibility.setText("Показать ключ");
 							input.setHint("Новый API-ключ");
 							input.setEnabled(true);
 							visibility.setEnabled(true);
